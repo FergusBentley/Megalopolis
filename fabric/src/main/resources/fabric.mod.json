@@ -1,0 +1,27 @@
+{
+	"schemaVersion": 1,
+	"id": "${mod_id}",
+	"version": "${version}",
+	"name": "${mod_name}",
+	"description": "Procedurally generated cities covering the world.",
+	"authors": [
+		"Fergus Bentley"
+	],
+	"license": "CC0-1.0",
+	"icon": "assets/megalopolis/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"com.fergusb.fabric.MegalopolisFabric"
+		]
+	},
+	"mixins": [
+		"megalopolis.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.20.1",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}

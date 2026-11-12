@@ -1,0 +1,17 @@
+plugins {
+	id 'net.fabricmc.fabric-loom'
+}
+
+base {
+	archivesName = "${mod_id}-common"
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${minecraft_version}"
+	compileOnly "net.fabricmc:fabric-loader:${loader_version}"
+}
+
+loom {
+	runConfigs.configureEach { ideConfigGenerated = false }
+}
+tasks.matching { it.name.startsWith('run') }.configureEach { enabled = false }
