@@ -15,6 +15,7 @@ public final class CityPlanner {
 	private final long seed;
 	private final TerrainSampler terrain;
 	private final DistrictFields fields;
+	private final GradeField grade;
 	private final Map<Long, Superblock> cache = new LinkedHashMap<>(256, 0.75f, true) {
 		@Override
 		protected boolean removeEldestEntry(Map.Entry<Long, Superblock> e) {
@@ -26,6 +27,11 @@ public final class CityPlanner {
 		this.seed = seed;
 		this.terrain = terrain;
 		this.fields = new DistrictFields(seed);
+		this.grade = new GradeField(terrain);
+	}
+
+	public GradeField grade() {
+		return grade;
 	}
 
 	public DistrictFields fields() {
@@ -203,17 +209,15 @@ public final class CityPlanner {
 
 		int[][] pts = {{r.minX(), r.minZ()}, {r.maxX(), r.minZ()}, {r.minX(), r.maxZ()}, {r.maxX(), r.maxZ()},
 				{r.centerX(), r.centerZ()}};
-		int min = Integer.MAX_VALUE, max = Integer.MIN_VALUE, sum = 0;
+		int baseY = grade.gradeY(r.centerX(), r.centerZ());
+		int maxDeviation = 0;
 		boolean water = false;
 		for (int[] p : pts) {
 			TerrainSampler.Sample s = terrain.sample(p[0], p[1]);
 			water |= s.water();
-			min = Math.min(min, s.groundY());
-			max = Math.max(max, s.groundY());
-			sum += s.groundY();
+			maxDeviation = Math.max(maxDeviation, Math.abs(s.groundY() - baseY));
 		}
-		int baseY = Math.round(sum / (float) pts.length);
-		if (water || max - min > 14) {
+		if (water || maxDeviation > 12) {
 			return new Lot(r, null, Lot.Use.UNBUILDABLE, baseY, 0, dt, cond, lotSeed);
 		}
 		if (park) {

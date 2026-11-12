@@ -3,6 +3,7 @@ package com.fergusb;
 import com.fergusb.platform.Platform;
 import com.fergusb.world.CityFeature;
 import com.fergusb.world.MegalopolisCommands;
+import com.fergusb.world.VanillaRemovals;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.Identifier;
@@ -29,6 +30,8 @@ public final class Megalopolis {
 		platform.register(BuiltInRegistries.FEATURE_TYPE, id("city"), CityFeature.CODEC);
 
 		platform.addOverworldFeature(GenerationStep.Decoration.TOP_LAYER_MODIFICATION, CITY_PLACED);
+
+		platform.removeOverworldFeatures(VanillaRemovals::shouldRemove);
 
 		platform.registerCommands(MegalopolisCommands::register);
 		LOGGER.info("Megalopolis loaded");
