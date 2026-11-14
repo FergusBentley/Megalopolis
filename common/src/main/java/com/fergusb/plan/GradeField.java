@@ -27,6 +27,10 @@ public final class GradeField {
 		return (int) Math.round(grade(x, z));
 	}
 
+	public boolean water(double x, double z) {
+		return rawNode((int) Math.round(x / GRID), (int) Math.round(z / GRID)).water();
+	}
+
 	private double node(int i, int j) {
 		long key = key(i, j);
 		synchronized (smooth) {

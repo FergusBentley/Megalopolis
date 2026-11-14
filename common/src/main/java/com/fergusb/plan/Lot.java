@@ -1,6 +1,6 @@
 package com.fergusb.plan;
 
-public record Lot(Rect bounds, Rect footprint, Use use, int baseY, int floors,
+public record Lot(Obb bounds, Obb footprint, Use use, int baseY, int floors,
 		double downtown, double condition, long seed) {
 
 	public enum Use { BUILDING, PLAZA, PARK, UNBUILDABLE }

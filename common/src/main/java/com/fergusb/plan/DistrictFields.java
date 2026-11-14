@@ -8,10 +8,16 @@ package com.fergusb.plan;
 public final class DistrictFields {
 	private final ValueNoise downtownNoise;
 	private final ValueNoise conditionNoise;
+	private final ValueNoise organicNoise;
 
 	public DistrictFields(long seed) {
 		this.downtownNoise = new ValueNoise(Hashing.hash(seed, 101), 1400, 3);
 		this.conditionNoise = new ValueNoise(Hashing.hash(seed, 102), 450, 3);
+		this.organicNoise = new ValueNoise(Hashing.hash(seed, 103), 1100, 3);
+	}
+
+	public double organic(double x, double z) {
+		return clamp01(0.5 + organicNoise.sample(x, z) * 1.6 - (downtown(x, z) - 0.5) * 0.8);
 	}
 
 	public double downtown(double x, double z) {

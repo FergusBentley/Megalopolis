@@ -9,10 +9,19 @@ public final class PlanMapRenderer {
     public static BufferedImage render(CityPlanner planner, int minX, int minZ, int sizeBlocks, int blocksPerPixel) {
         int px = Math.max(1, sizeBlocks / blocksPerPixel);
         BufferedImage img = new BufferedImage(px, px, BufferedImage.TYPE_INT_RGB);
+        GradeField grade = planner.grade();
         for (int iz = 0; iz < px; iz++) {
             for (int ix = 0; ix < px; ix++) {
                 int x = minX + ix * blocksPerPixel, z = minZ + iz * blocksPerPixel;
-                img.setRGB(ix, iz, color(planner.classify(x, z), x, z));
+                CityPlanner.Cell cell = planner.classify(x, z);
+                int rgb = cell.kind() == CityPlanner.Kind.GAP && grade.water(x, z) ? 0x5b86c2 : color(cell, x, z);
+                if (!cell.isRoad()) {
+                    int band = (int) Math.floor(grade.grade(x, z) / 8);
+                    int bandR = (int) Math.floor(grade.grade(x + blocksPerPixel, z) / 8);
+                    int bandD = (int) Math.floor(grade.grade(x, z + blocksPerPixel) / 8);
+                    if (band != bandR || band != bandD) rgb = darken(rgb, 0.8);
+                }
+                img.setRGB(ix, iz, rgb);
             }
         }
         return img;
@@ -22,7 +31,7 @@ public final class PlanMapRenderer {
         switch (c.kind()) {
             case ARTERIAL: return 0x262626;
             case STREET: return 0x5c5c5c;
-            case GAP: return 0xff00ff; // should never appear
+            case GAP: return 0x8fbf72;
             default: break;
         }
         Lot lot = c.lot();
@@ -32,7 +41,7 @@ public final class PlanMapRenderer {
             case UNBUILDABLE: return 0x5b86c2;
             default: break;
         }
-        Rect fp = lot.footprint();
+        Obb fp = lot.footprint();
         if (!fp.contains(x, z)) return 0xd8d2bc; // setback / alley
         // Hue: condition. Brightness: height.
         double h = Math.min(1, lot.floors() / 30.0);
@@ -43,6 +52,10 @@ public final class PlanMapRenderer {
         double bright = 1.15 - 0.75 * h;
         if (fp.onEdge(x, z)) bright *= 0.6; // outline shows where buildings touch
         return rgb(r * bright, g * bright, b * bright);
+    }
+
+    private static int darken(int rgb, double f) {
+        return rgb(((rgb >> 16) & 255) * f, ((rgb >> 8) & 255) * f, (rgb & 255) * f);
     }
 
     private static int rgb(double r, double g, double b) {

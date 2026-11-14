@@ -63,15 +63,17 @@ public final class MegalopolisCommands {
 		int x = (int) Math.floor(source.getPosition().x);
 		int z = (int) Math.floor(source.getPosition().z);
 		CityPlanner.Cell cell = planner.classify(x, z);
-		String text;
+		String where = String.format("%s (downtown=%.2f, condition=%.2f, organic=%.2f)", cell.kind(),
+				planner.fields().downtown(x, z), planner.fields().condition(x, z), planner.fields().organic(x, z));
+		if (cell.kind() != CityPlanner.Kind.ARTERIAL) {
+			where += planner.superblockAt(x, z).organic ? " in an organic superblock" : " in a grid superblock";
+		}
 		if (cell.kind() == CityPlanner.Kind.LOT) {
 			Lot l = cell.lot();
-			text = String.format("Lot %s: %dx%d, floors=%d, baseY=%d, downtown=%.2f, condition=%.2f",
-					l.use(), l.bounds().width(), l.bounds().depth(), l.floors(), l.baseY(), l.downtown(), l.condition());
-		} else {
-			text = String.format("%s (downtown=%.2f, condition=%.2f)", cell.kind(),
-					planner.fields().downtown(x, z), planner.fields().condition(x, z));
+			where += String.format(" | %s %dx%d, floors=%d, baseY=%d",
+					l.use(), l.bounds().widthU(), l.bounds().depthV(), l.floors(), l.baseY());
 		}
+		String text = where;
 		source.sendSuccess(() -> Component.literal(text), false);
 		return 1;
 	}

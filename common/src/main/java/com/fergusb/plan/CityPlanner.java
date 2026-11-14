@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 public final class CityPlanner {
 	public static final int CELL = 512;
@@ -16,10 +17,10 @@ public final class CityPlanner {
 	private final TerrainSampler terrain;
 	private final DistrictFields fields;
 	private final GradeField grade;
-	private final Map<Long, Superblock> cache = new LinkedHashMap<>(256, 0.75f, true) {
+	private final Map<Long, CompletableFuture<Superblock>> cache = new LinkedHashMap<>(256, 0.75f, true) {
 		@Override
-		protected boolean removeEldestEntry(Map.Entry<Long, Superblock> e) {
-			return size() > 512;
+		protected boolean removeEldestEntry(Map.Entry<Long, CompletableFuture<Superblock>> e) {
+			return size() > 256;
 		}
 	};
 
@@ -28,6 +29,10 @@ public final class CityPlanner {
 		this.terrain = terrain;
 		this.fields = new DistrictFields(seed);
 		this.grade = new GradeField(terrain);
+	}
+
+	public long seed() {
+		return seed;
 	}
 
 	public GradeField grade() {
@@ -84,7 +89,11 @@ public final class CityPlanner {
 
 	public enum Kind { ARTERIAL, STREET, LOT, GAP }
 
-	public record Cell(Kind kind, Road road, Lot lot, int arterialDx, int arterialDz) {}
+	public record Cell(Kind kind, Road road, Lot lot, int arterialDx, int arterialDz) {
+		public boolean isRoad() {
+			return kind == Kind.ARTERIAL || kind == Kind.STREET;
+		}
+	}
 
 	public Cell classify(int x, int z) {
 		int dx = arterialOffsetX(x), dz = arterialOffsetZ(z);
@@ -92,26 +101,40 @@ public final class CityPlanner {
 			return new Cell(Kind.ARTERIAL, null, null, dx, dz);
 		}
 		Superblock sb = superblock(superColumn(x), superRow(z));
-		for (Road r : sb.streets()) {
-			if (r.rect().contains(x, z)) return new Cell(Kind.STREET, r, null, 0, 0);
-		}
-		for (Lot l : sb.lots()) {
-			if (l.bounds().contains(x, z)) return new Cell(Kind.LOT, null, l, 0, 0);
-		}
+		Road road = sb.streetAt(x, z);
+		if (road != null) return new Cell(Kind.STREET, road, null, 0, 0);
+		Lot lot = sb.lotAt(x, z);
+		if (lot != null) return new Cell(Kind.LOT, null, lot, 0, 0);
 		return new Cell(Kind.GAP, null, null, 0, 0);
+	}
+
+	public Superblock superblockAt(int x, int z) {
+		return superblock(superColumn(x), superRow(z));
 	}
 
 	public Superblock superblock(int i, int j) {
 		long key = ((long) i << 32) ^ (j & 0xFFFFFFFFL);
+		CompletableFuture<Superblock> f;
+		boolean mine = false;
 		synchronized (cache) {
-			Superblock sb = cache.get(key);
-			if (sb != null) return sb;
+			f = cache.get(key);
+			if (f == null) {
+				f = new CompletableFuture<>();
+				cache.put(key, f);
+				mine = true;
+			}
 		}
-		Superblock sb = plan(i, j);
-		synchronized (cache) {
-			cache.put(key, sb);
+		if (mine) {
+			try {
+				f.complete(plan(i, j));
+			} catch (Throwable t) {
+				f.completeExceptionally(t);
+				synchronized (cache) {
+					cache.remove(key);
+				}
+			}
 		}
-		return sb;
+		return f.join();
 	}
 
 	// planning
@@ -122,111 +145,56 @@ public final class CityPlanner {
 				arterialX(i + 1) - ARTERIAL_HALF_WIDTH - 1, arterialZ(j + 1) - ARTERIAL_HALF_WIDTH - 1);
 		Rng rng = new Rng(Hashing.hash(seed, 3, i, j));
 		List<Road> streets = new ArrayList<>();
-		List<Rect> blocks = new ArrayList<>();
-		split(bounds, rng, streets, blocks);
 		List<Lot> lots = new ArrayList<>();
-		for (Rect block : blocks) {
-			makeLots(block, rng, lots);
+		boolean organic = isOrganic(bounds);
+		if (organic) {
+			new OrganicLayout(this, bounds, rng).plan(streets, lots);
+		} else {
+			new GridLayout(this, bounds, rng).plan(streets, lots);
 		}
-		return new Superblock(i, j, bounds, List.copyOf(streets), List.copyOf(lots));
+		return new Superblock(i, j, bounds, organic, streets, lots);
 	}
 
-	private void split(Rect r, Rng rng, List<Road> streets, List<Rect> blocks) {
-		double dt = fields.downtown(r.centerX(), r.centerZ());
-		int maxSize = (int) ValueNoise.lerp(dt, 52, 100);
-		if (r.width() <= maxSize && r.depth() <= maxSize) {
-			blocks.add(r);
-			return;
-		}
-		boolean cutAcrossX = r.width() >= r.depth();
-		int len = cutAcrossX ? r.width() : r.depth();
-		int offset = (int) (len * rng.range(0.38, 0.62));
-		int before = offset;
-		int after = len - offset - STREET_WIDTH;
-		if (before < 20 || after < 20) {
-			blocks.add(r);
-			return;
-		}
-		Rect a, b, street;
-		if (cutAcrossX) {
-			int s = r.minX() + offset;
-			street = new Rect(s, r.minZ(), s + STREET_WIDTH - 1, r.maxZ());
-			a = new Rect(r.minX(), r.minZ(), s - 1, r.maxZ());
-			b = new Rect(s + STREET_WIDTH, r.minZ(), r.maxX(), r.maxZ());
-		} else {
-			int s = r.minZ() + offset;
-			street = new Rect(r.minX(), s, r.maxX(), s + STREET_WIDTH - 1);
-			a = new Rect(r.minX(), r.minZ(), r.maxX(), s - 1);
-			b = new Rect(r.minX(), s + STREET_WIDTH, r.maxX(), r.maxZ());
-		}
-		streets.add(new Road(street, Road.Kind.STREET));
-		split(a, rng, streets, blocks);
-		split(b, rng, streets, blocks);
-	}
-
-	private void makeLots(Rect block, Rng rng, List<Lot> out) {
-		double dt = fields.downtown(block.centerX(), block.centerZ());
-		double parkChance = 0.03 + 0.10 * (1 - dt);
-		if (rng.chance(parkChance)) {
-			out.add(finishLot(block, rng, true));
-			return;
-		}
-		boolean alongX = block.width() >= block.depth();
-		int shortLen = alongX ? block.depth() : block.width();
-		List<int[]> rows = new ArrayList<>();
-		int shortMin = alongX ? block.minZ() : block.minX();
-		int shortMax = alongX ? block.maxZ() : block.maxX();
-		if (shortLen >= 20) {
-			int mid = shortMin + shortLen / 2 + rng.nextInt(-2, 2);
-			rows.add(new int[] {shortMin, mid - 1});
-			rows.add(new int[] {mid, shortMax});
-		} else {
-			rows.add(new int[] {shortMin, shortMax});
-		}
-		int longMin = alongX ? block.minX() : block.minZ();
-		int longMax = alongX ? block.maxX() : block.maxZ();
-		int minW = (int) ValueNoise.lerp(dt, 8, 14);
-		int maxW = (int) ValueNoise.lerp(dt, 18, 40);
-		for (int[] row : rows) {
-			int cursor = longMin;
-			while (cursor <= longMax) {
-				int remaining = longMax - cursor + 1;
-				int w = rng.nextInt(minW, maxW);
-				if (remaining - w < minW) w = remaining;
-				Rect lot = alongX
-						? new Rect(cursor, row[0], cursor + w - 1, row[1])
-						: new Rect(row[0], cursor, row[1], cursor + w - 1);
-				out.add(finishLot(lot, rng, false));
-				cursor += w;
+	private boolean isOrganic(Rect b) {
+		double min = Double.MAX_VALUE, max = -Double.MAX_VALUE;
+		for (int a = 0; a <= 2; a++) {
+			for (int c = 0; c <= 2; c++) {
+				double g = grade.grade(b.minX() + a * (b.width() - 1) / 2.0, b.minZ() + c * (b.depth() - 1) / 2.0);
+				min = Math.min(min, g);
+				max = Math.max(max, g);
 			}
 		}
+		double reliefBoost = DistrictFields.clamp01((max - min - 16) / 60.0) * 0.4;
+		return fields.organic(b.centerX(), b.centerZ()) + reliefBoost > 0.5;
 	}
 
-	private Lot finishLot(Rect r, Rng rng, boolean park) {
+	Lot finishLot(Obb r, Rng rng, boolean park) {
 		long lotSeed = rng.nextLong();
-		double dt = fields.downtown(r.centerX(), r.centerZ());
-		double cond = fields.condition(r.centerX(), r.centerZ());
+		double dt = fields.downtown(r.cx, r.cz);
+		double cond = fields.condition(r.cx, r.cz);
 
-		int[][] pts = {{r.minX(), r.minZ()}, {r.maxX(), r.minZ()}, {r.minX(), r.maxZ()}, {r.maxX(), r.maxZ()},
-				{r.centerX(), r.centerZ()}};
-		int baseY = grade.gradeY(r.centerX(), r.centerZ());
+		// Floor on same smoothed grade
+		int baseY = (int) Math.round(grade.grade(r.cx, r.cz));
 		int maxDeviation = 0;
 		boolean water = false;
-		for (int[] p : pts) {
-			TerrainSampler.Sample s = terrain.sample(p[0], p[1]);
+		List<double[]> pts = new ArrayList<>(List.of(r.corners()));
+		pts.add(new double[] {r.cx, r.cz});
+		for (double[] p : pts) {
+			TerrainSampler.Sample s = terrain.sample((int) Math.round(p[0]), (int) Math.round(p[1]));
 			water |= s.water();
 			maxDeviation = Math.max(maxDeviation, Math.abs(s.groundY() - baseY));
 		}
-		if (water || maxDeviation > 12) {
+		if (water) {
 			return new Lot(r, null, Lot.Use.UNBUILDABLE, baseY, 0, dt, cond, lotSeed);
 		}
-		if (park) {
+		if (park || maxDeviation > 12) {
+			// Too steep to build on
 			return new Lot(r, null, Lot.Use.PARK, baseY, 0, dt, cond, lotSeed);
 		}
 
 		int setback = dt > 0.65 ? 0 : (dt > 0.35 ? 1 : 2);
-		Rect fp = r.shrink(setback);
-		if (fp == null || fp.width() < 5 || fp.depth() < 5) {
+		Obb fp = r.shrink(setback);
+		if (fp == null || fp.widthU() < 5 || fp.depthV() < 5) {
 			return new Lot(r, null, Lot.Use.PLAZA, baseY, 0, dt, cond, lotSeed);
 		}
 
@@ -235,7 +203,7 @@ public final class CityPlanner {
 		double mult = lr.range(0.6, 1.4);
 		if (dt > 0.7 && lr.chance(0.06)) mult *= 2.2; // occasional tower
 		int floors = (int) Math.max(1, Math.round(base * mult));
-		if (Math.min(fp.width(), fp.depth()) < 9) floors = Math.min(floors, 8);
+		if (Math.min(fp.widthU(), fp.depthV()) < 9) floors = Math.min(floors, 8);
 		floors = Math.min(floors, MAX_FLOORS);
 		return new Lot(r, fp, Lot.Use.BUILDING, baseY, floors, dt, cond, lotSeed);
 	}
