@@ -10,4 +10,8 @@ public interface TerrainSampler {
 	}
 
 	Sample sample(int x, int z);
+
+	default String biome(int x, int z) {
+		return "plains";
+	}
 }

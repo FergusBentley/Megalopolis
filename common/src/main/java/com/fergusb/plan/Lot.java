@@ -1,7 +1,7 @@
 package com.fergusb.plan;
 
 public record Lot(Obb bounds, Obb footprint, Use use, int baseY, int floors,
-		double downtown, double condition, long seed) {
+				  double downtown, double condition, long seed, BuildingSpec spec) {
 
 	public enum Use { BUILDING, PLAZA, PARK, UNBUILDABLE }
 
@@ -9,3 +9,4 @@ public record Lot(Obb bounds, Obb footprint, Use use, int baseY, int floors,
 		return baseY + floors * CityPlanner.FLOOR_HEIGHT;
 	}
 }
+

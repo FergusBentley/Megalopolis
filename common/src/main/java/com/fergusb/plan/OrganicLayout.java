@@ -33,6 +33,7 @@ final class OrganicLayout {
 		RoadRouter router = new RoadRouter(planner.grade(), bounds);
 		for (int[] e : edges) {
 			double[] a = nodes.get(e[0]), b = nodes.get(e[1]);
+			if (Math.hypot(a[0] - b[0], a[1] - b[1]) < 2) continue;
 			double[][] line = router.route(a[0], a[1], b[0], b[1]);
 			streets.add(new Road(line[0], line[1], HALF_WIDTH, Road.Kind.STREET));
 		}
@@ -242,7 +243,7 @@ final class OrganicLayout {
 			for (int dz = -32; dz <= 32; dz += 32) {
 				for (int k : index.query(x + dx, z + dz)) {
 					double[] n = streets.get(k).nearest(x, z);
-					if (best == null || n[4] < best[4]) best = n;
+					if (n != null && (best == null || n[4] < best[4])) best = n;
 				}
 			}
 		}

@@ -9,11 +9,13 @@ public final class DistrictFields {
 	private final ValueNoise downtownNoise;
 	private final ValueNoise conditionNoise;
 	private final ValueNoise organicNoise;
+	private final ValueNoise themeNoise;
 
 	public DistrictFields(long seed) {
 		this.downtownNoise = new ValueNoise(Hashing.hash(seed, 101), 1400, 3);
-		this.conditionNoise = new ValueNoise(Hashing.hash(seed, 102), 450, 3);
+		this.conditionNoise = new ValueNoise(Hashing.hash(seed, 102), 260, 3);
 		this.organicNoise = new ValueNoise(Hashing.hash(seed, 103), 1100, 3);
+		this.themeNoise = new ValueNoise(Hashing.hash(seed, 104), 700, 2);
 	}
 
 	public double organic(double x, double z) {
@@ -26,7 +28,12 @@ public final class DistrictFields {
 
 	public double condition(double x, double z) {
 		double d = downtown(x, z);
-		return clamp01(0.5 + conditionNoise.sample(x, z) * 1.5 + (d - 0.5) * 0.5);
+		return clamp01(1.1 + conditionNoise.sample(x, z) * 1.64 + (d - 0.5) * 0.1);
+	}
+
+	public int theme(double x, double z) {
+		double t = clamp01(0.5 + themeNoise.sample(x, z) * 1.8);
+		return Math.min(4, (int) (t * 5));
 	}
 
 	static double clamp01(double v) {

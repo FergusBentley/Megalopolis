@@ -61,7 +61,7 @@ public final class Road {
 	}
 
 	public double[] nearest(double x, double z) {
-		double[] best = null;
+		double[] best = new double[] {xs[0], zs[0], 1, 0, Math.hypot(xs[0] - x, zs[0] - z)};
 		double bestD = Double.MAX_VALUE;
 		for (int i = 0; i + 1 < xs.length; i++) {
 			double ax = xs[i], az = zs[i], bx = xs[i + 1], bz = zs[i + 1];

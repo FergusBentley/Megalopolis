@@ -11,7 +11,7 @@ public final class CityPlanner {
 	public static final int ARTERIAL_HALF_WIDTH = 5; // 11 blocks wide
 	public static final int STREET_WIDTH = 5;
 	public static final int FLOOR_HEIGHT = 4;
-	public static final int MAX_FLOORS = 55;
+	public static final int MAX_FLOORS = 40;
 
 	private final long seed;
 	private final TerrainSampler terrain;
@@ -152,7 +152,7 @@ public final class CityPlanner {
 		} else {
 			new GridLayout(this, bounds, rng).plan(streets, lots);
 		}
-		return new Superblock(i, j, bounds, organic, streets, lots);
+		return new Superblock(i, j, bounds, organic, streets, BuildingDesigner.design(lots, fields, terrain));
 	}
 
 	private boolean isOrganic(Rect b) {
@@ -176,35 +176,32 @@ public final class CityPlanner {
 		// Floor on same smoothed grade
 		int baseY = (int) Math.round(grade.grade(r.cx, r.cz));
 		int maxDeviation = 0;
-		boolean water = false;
+		int waterSamples = 0;
 		List<double[]> pts = new ArrayList<>(List.of(r.corners()));
 		pts.add(new double[] {r.cx, r.cz});
 		for (double[] p : pts) {
 			TerrainSampler.Sample s = terrain.sample((int) Math.round(p[0]), (int) Math.round(p[1]));
-			water |= s.water();
+			if (s.water()) waterSamples++;
 			maxDeviation = Math.max(maxDeviation, Math.abs(s.groundY() - baseY));
 		}
-		if (water) {
-			return new Lot(r, null, Lot.Use.UNBUILDABLE, baseY, 0, dt, cond, lotSeed);
+		if (waterSamples >= 3) {
+			return new Lot(r, null, Lot.Use.UNBUILDABLE, baseY, 0, dt, cond, lotSeed, null);
 		}
-		if (park || maxDeviation > 12) {
-			// Too steep to build on
-			return new Lot(r, null, Lot.Use.PARK, baseY, 0, dt, cond, lotSeed);
-		}
-
-		int setback = dt > 0.65 ? 0 : (dt > 0.35 ? 1 : 2);
-		Obb fp = r.shrink(setback);
-		if (fp == null || fp.widthU() < 5 || fp.depthV() < 5) {
-			return new Lot(r, null, Lot.Use.PLAZA, baseY, 0, dt, cond, lotSeed);
+		if (park || waterSamples > 0 || maxDeviation > 12) {
+			// Too steep or water
+			return new Lot(r, null, Lot.Use.PARK, baseY, 0, dt, cond, lotSeed, null);
 		}
 
 		Rng lr = new Rng(lotSeed);
-		double base = ValueNoise.lerp(Math.pow(dt, 1.6), 2, 22);
-		double mult = lr.range(0.6, 1.4);
-		if (dt > 0.7 && lr.chance(0.06)) mult *= 2.2; // occasional tower
-		int floors = (int) Math.max(1, Math.round(base * mult));
-		if (Math.min(fp.widthU(), fp.depthV()) < 9) floors = Math.min(floors, 8);
-		floors = Math.min(floors, MAX_FLOORS);
-		return new Lot(r, fp, Lot.Use.BUILDING, baseY, floors, dt, cond, lotSeed);
+		BuildingSpec.Purpose purpose = BuildingDesigner.purpose(lr, dt, r.widthU(), r.depthV());
+		Obb fp = r.shrink(BuildingDesigner.setback(purpose, dt));
+		if (fp == null || fp.widthU() < 5 || fp.depthV() < 5) {
+			return new Lot(r, null, Lot.Use.PLAZA, baseY, 0, dt, cond, lotSeed, null);
+		}
+
+		int floors = BuildingDesigner.floors(lr, purpose, dt, Math.min(fp.widthU(), fp.depthV()));
+		BuildingSpec draft = new BuildingSpec(purpose, BuildingSpec.Shape.RECT, BuildingSpec.Massing.STRAIGHT,
+				BuildingSpec.Roof.FLAT, BuildingSpec.WindowStyle.BANDS, BuildingSpec.PaletteFamily.WHITE_MODERN, 0, lotSeed, "plains", false);
+		return new Lot(r, fp, Lot.Use.BUILDING, baseY, floors, dt, cond, lotSeed, draft);
 	}
 }
