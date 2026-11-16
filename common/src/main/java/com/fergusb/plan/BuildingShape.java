@@ -17,9 +17,10 @@ public final class BuildingShape {
 	}
 
 	public static boolean inside(Lot lot, int lu, int lv, int floor) {
+		if (lot.mask() != null) return lot.mask().local(lu, lv);
 		BuildingSpec s = lot.spec();
 		int w = lot.footprint().widthU(), d = lot.footprint().depthV();
-		int inset = inset(s, w, d, floor, lot.floors());
+		int inset = inset(s, w, d, Math.max(0, floor - lot.lift()), Math.max(1, lot.floors() - lot.lift()));
 		int u = lu - inset, v = lv - inset, iw = w - 2 * inset, id = d - 2 * inset;
 		if (u < 0 || v < 0 || u >= iw || v >= id) return false;
 		return insideFootprint(s, u, v, iw, id);

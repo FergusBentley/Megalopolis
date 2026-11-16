@@ -7,8 +7,8 @@ import java.util.PriorityQueue;
 
 final class RoadRouter {
 	private static final int CELL = 4;
-	private static final double SLOPE_COST = 30;
-	private static final double STEEP = 0.35;
+	private static final double SLOPE_COST = 90;
+	private static final double STEEP = 0.25;
 	private static final int MAX_EXPANSIONS = 40_000;
 
 	private final GradeField grade;
@@ -81,6 +81,7 @@ final class RoadRouter {
 		}
 		pts = simplify(pts, 1.5);
 		pts = chaikin(chaikin(pts));
+		pts = straightenCrossings(pts);
 		double[] xs = new double[pts.size()], zs = new double[pts.size()];
 		for (int i = 0; i < pts.size(); i++) {
 			xs[i] = pts.get(i)[0];
@@ -161,6 +162,17 @@ final class RoadRouter {
 		double len2 = dx * dx + dz * dz;
 		double t = len2 == 0 ? 0 : Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / len2));
 		return Math.hypot(a[0] + t * dx - p[0], a[1] + t * dz - p[1]);
+	}
+
+	private List<double[]> straightenCrossings(List<double[]> pts) {
+		List<double[]> out = new ArrayList<>();
+		for (int i = 0; i < pts.size(); i++) {
+			double[] p = pts.get(i);
+			boolean inner = i > 0 && i < pts.size() - 1;
+			if (inner && grade.water(p[0], p[1])) continue;
+			out.add(p);
+		}
+		return out;
 	}
 
 	static List<double[]> chaikin(List<double[]> pts) {

@@ -20,11 +20,11 @@ public final class BiomePalettes {
 		if (b.contains("jungle") || b.contains("bamboo")) return of(PaletteFamily.VERDANT, PaletteFamily.TEAL_TECH, PaletteFamily.PRISMARINE, PaletteFamily.TIMBER);
 		if (b.contains("swamp") || b.contains("mangrove")) return of(PaletteFamily.MUD, PaletteFamily.TUFF, PaletteFamily.SLATE, PaletteFamily.VERDANT);
 		if (b.contains("cherry") || b.contains("meadow") || b.contains("flower")) return of(PaletteFamily.PASTEL, PaletteFamily.WHITE_MODERN, PaletteFamily.PURPUR, PaletteFamily.TIMBER);
-		if (b.contains("taiga") || b.contains("windswept")) return of(PaletteFamily.SLATE, PaletteFamily.TIMBER, PaletteFamily.TUFF, PaletteFamily.BLACKSTONE);
-		if (b.contains("dark_forest") || b.contains("pale_garden")) return of(PaletteFamily.DARK_GLASS, PaletteFamily.BLACKSTONE, PaletteFamily.TIMBER);
+		if (b.contains("taiga") || b.contains("windswept")) return of(PaletteFamily.SLATE, PaletteFamily.TIMBER, PaletteFamily.TUFF, PaletteFamily.BLACKSTONE, PaletteFamily.FROST, PaletteFamily.COPPER);
+		if (b.contains("dark_forest") || b.contains("pale_garden")) return of(PaletteFamily.DARK_GLASS, PaletteFamily.BLACKSTONE, PaletteFamily.TIMBER, PaletteFamily.SLATE, PaletteFamily.PURPUR);
 		if (b.contains("mushroom")) return of(PaletteFamily.PURPUR, PaletteFamily.RED_ACCENT, PaletteFamily.PASTEL);
 		if (b.contains("ocean") || b.contains("river") || b.contains("shore")) return of(PaletteFamily.PRISMARINE, PaletteFamily.BLUE_ACCENT, PaletteFamily.WHITE_MODERN, PaletteFamily.TEAL_TECH);
-		if (b.contains("forest") || b.contains("birch") || b.contains("dappled")) return of(PaletteFamily.TIMBER, PaletteFamily.WHITE_MODERN, PaletteFamily.COPPER, PaletteFamily.TUFF);
+		if (b.contains("forest") || b.contains("birch") || b.contains("dappled")) return of(PaletteFamily.TIMBER, PaletteFamily.WHITE_MODERN, PaletteFamily.COPPER, PaletteFamily.TUFF, PaletteFamily.VERDANT, PaletteFamily.TEAL_TECH);
 		return of(PaletteFamily.WHITE_MODERN, PaletteFamily.RED_ACCENT, PaletteFamily.BLUE_ACCENT, PaletteFamily.COPPER, PaletteFamily.QUARTZ_GLASS, PaletteFamily.DARK_GLASS);
 	}
 

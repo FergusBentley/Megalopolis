@@ -66,6 +66,20 @@ public final class Palettes {
 
 	private Palettes() {}
 
+	public static Palette mixed(PaletteFamily family, String biome, long seed) {
+		Palette p = of(family, biome);
+		PaletteFamily[] all = java.util.Arrays.copyOf(PaletteFamily.values(), PaletteFamily.values().length - 2); // not the dingy ones
+		BlockState trim = p.trim(), accent = p.accent(), glass = p.glass();
+		if (unit(seed, 1) < 0.35) trim = PALETTES.get(all[(int) (unit(seed, 2) * all.length)]).trim();
+		if (unit(seed, 3) < 0.35) accent = PALETTES.get(all[(int) (unit(seed, 4) * all.length)]).accent();
+		if (unit(seed, 5) < 0.25) glass = PALETTES.get(all[(int) (unit(seed, 6) * all.length)]).glass();
+		return new Palette(p.wall(), trim, accent, glass, p.roof(), p.weatheredWall(), p.weatheredGlass());
+	}
+
+	private static double unit(long seed, int salt) {
+		return com.fergusb.plan.Hashing.unit(com.fergusb.plan.Hashing.hash(seed, 71, salt));
+	}
+
 	public static Palette of(PaletteFamily family, String biome) {
 		Palette p = PALETTES.get(family);
 		if (family == PaletteFamily.TIMBER) {

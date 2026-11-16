@@ -21,7 +21,7 @@ public record CityFeature() implements Feature {
 	public boolean place(WorldGenLevel level, ChunkGenerator generator, RandomSource random, BlockPos origin) {
 		ServerLevel server = level.getLevel();
 		if (server.dimension() != Level.OVERWORLD) return false;
-		CityPlacer.placeChunk(level, Planners.get(server), origin.getX() >> 4, origin.getZ() >> 4);
+		CityPlacer.placeChunk(level, generator, random, Planners.get(server), origin.getX() >> 4, origin.getZ() >> 4);
 		return true;
 	}
 }

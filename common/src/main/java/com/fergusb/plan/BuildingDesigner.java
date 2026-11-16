@@ -91,8 +91,14 @@ final class BuildingDesigner {
 					bestClashes = clashes;
 				}
 			}
+			if (lot.mask() != null) {
+				BuildingSpec.Roof roof = best.roof() == BuildingSpec.Roof.GABLE || best.roof() == BuildingSpec.Roof.SPIRE
+						? BuildingSpec.Roof.PARAPET : best.roof();
+				best = new BuildingSpec(best.purpose(), Shape.RECT, Massing.STRAIGHT, roof, best.windows(), best.palette(),
+						best.unitWidth(), best.seed(), best.biome(), best.woodAccent());
+			}
 			out.add(new Lot(lot.bounds(), lot.footprint(), lot.use(), lot.baseY(), lot.floors(),
-					lot.downtown(), lot.condition(), lot.seed(), best));
+					lot.downtown(), lot.condition(), lot.seed(), best, lot.mask(), lot.lift()));
 		}
 		return out;
 	}
@@ -151,7 +157,7 @@ final class BuildingDesigner {
 
 		PaletteFamily palette = palette(rng, fields, fp, biome, lot.condition());
 		boolean woodAccent = palette == PaletteFamily.TIMBER
-				|| (p != Purpose.OFFICE && rng.chance(BiomePalettes.woody(biome) ? 0.45 : 0.25));
+				|| (p != Purpose.OFFICE && rng.chance(BiomePalettes.woody(biome) ? 0.12 : 0.06));
 		return new BuildingSpec(p, shape, massing, roof, windows, palette, unitWidth, rng.nextLong(), biome, woodAccent);
 	}
 
@@ -161,8 +167,8 @@ final class BuildingDesigner {
 		}
 		double r = rng.nextDouble();
 		PaletteFamily[] options;
-		if (r < 0.7) options = BiomePalettes.families(biome);
-		else if (r < 0.9) options = THEMES[fields.theme(fp.cx, fp.cz)];
+		if (r < 0.4) options = BiomePalettes.families(biome);
+		else if (r < 0.6) options = THEMES[fields.theme(fp.cx, fp.cz)];
 		else options = BiomePalettes.ANY;
 		return options[rng.nextInt(0, options.length - 1)];
 	}

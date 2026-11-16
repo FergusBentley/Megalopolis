@@ -10,10 +10,16 @@ public final class Superblock {
     public final boolean organic;
     public final List<Road> streets;
     public final List<Lot> lots;
+    public final List<Junction> junctions;
+    public final RoadMap map;
     private final SpatialIndex streetIndex;
+    private final SpatialIndex junctionIndex;
     private final SpatialIndex lotIndex;
+    private final java.util.BitSet wild;
 
-    public Superblock(int i, int j, Rect bounds, boolean organic, List<Road> streets, List<Lot> lots) {
+    public Superblock(int i, int j, Rect bounds, boolean organic, List<Road> streets, List<Lot> lots, List<Junction> junctions,
+                      java.util.BitSet wild, RoadMap map) {
+        this.wild = wild;
         this.i = i;
         this.j = j;
         this.bounds = bounds;
@@ -26,9 +32,31 @@ public final class Superblock {
         List<int[]> lb = new ArrayList<>();
         for (Lot l : lots) lb.add(new int[] {l.bounds().minX, l.bounds().minZ, l.bounds().maxX, l.bounds().maxZ});
         this.lotIndex = new SpatialIndex(lb);
+        this.junctions = List.copyOf(junctions);
+        List<int[]> jb = new ArrayList<>();
+        for (Junction jn : junctions) {
+            jb.add(new int[] {(int) Math.floor(jn.x() - jn.r()), (int) Math.floor(jn.z() - jn.r()),
+                    (int) Math.ceil(jn.x() + jn.r()), (int) Math.ceil(jn.z() + jn.r())});
+        }
+        this.junctionIndex = new SpatialIndex(jb);
+        this.map = map;
+    }
+
+    /** True where the ground is left natural (around tunnels) */
+    public boolean wildAt(int x, int z) {
+        int lx = x - bounds.minX(), lz = z - bounds.minZ();
+        return lx >= 0 && lz >= 0 && lx < bounds.width() && lz < bounds.depth() && wild.get(lx * bounds.depth() + lz);
+    }
+
+    public Junction junctionAt(int x, int z) {
+        for (int k : junctionIndex.query(x, z)) {
+            if (junctions.get(k).contains(x, z)) return junctions.get(k);
+        }
+        return null;
     }
 
     public Road streetAt(int x, int z) {
+        if (!map.built(x, z)) return null;
         for (int k : streetIndex.query(x, z)) {
             if (streets.get(k).contains(x, z)) return streets.get(k);
         }
@@ -37,7 +65,7 @@ public final class Superblock {
 
     public Lot lotAt(int x, int z) {
         for (int k : lotIndex.query(x, z)) {
-            if (lots.get(k).bounds().contains(x, z)) return lots.get(k);
+            if (lots.get(k).contains(x, z)) return lots.get(k);
         }
         return null;
     }

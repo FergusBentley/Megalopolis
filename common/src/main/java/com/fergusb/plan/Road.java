@@ -4,15 +4,19 @@ public final class Road {
 	public enum Kind { ARTERIAL, STREET }
 
 	private final double[] xs, zs;
+	private final double[] arc; // cumulative length at each point
 	public final double halfWidth;
 	public final Kind kind;
 	public final int minX, minZ, maxX, maxZ;
+	public RoadProfile profile;
 
 	public Road(double[] xs, double[] zs, double halfWidth, Kind kind) {
 		this.xs = xs;
 		this.zs = zs;
 		this.halfWidth = halfWidth;
 		this.kind = kind;
+		this.arc = new double[xs.length];
+		for (int i = 1; i < xs.length; i++) arc[i] = arc[i - 1] + Math.hypot(xs[i] - xs[i - 1], zs[i] - zs[i - 1]);
 		double x0 = Double.MAX_VALUE, x1 = -Double.MAX_VALUE, z0 = Double.MAX_VALUE, z1 = -Double.MAX_VALUE;
 		for (int i = 0; i < xs.length; i++) {
 			x0 = Math.min(x0, xs[i]);
@@ -43,7 +47,19 @@ public final class Road {
 
 	public boolean containsWithin(double x, double z, double dist) {
 		if (x < minX - dist || x > maxX + dist || z < minZ - dist || z > maxZ + dist) return false;
-		return distanceSq(x, z) <= dist * dist;
+		// Stops at the first segment close enough, skipping segments whose box is too far away
+		double d2 = dist * dist;
+		for (int i = 0; i + 1 < xs.length; i++) {
+			double ax = xs[i], az = zs[i], bx = xs[i + 1], bz = zs[i + 1];
+			if (x < Math.min(ax, bx) - dist || x > Math.max(ax, bx) + dist
+					|| z < Math.min(az, bz) - dist || z > Math.max(az, bz) + dist) continue;
+			double dx = bx - ax, dz = bz - az;
+			double len2 = dx * dx + dz * dz;
+			double t = len2 == 0 ? 0 : Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / len2));
+			double px = ax + t * dx - x, pz = az + t * dz - z;
+			if (px * px + pz * pz <= d2) return true;
+		}
+		return false;
 	}
 
 	public double distanceSq(double x, double z) {
@@ -78,6 +94,47 @@ public final class Road {
 			}
 		}
 		return best;
+	}
+
+	public double length() {
+		return arc[arc.length - 1];
+	}
+
+	/** Distance along the center line of the point nearest (x, z) */
+	public double arcAt(double x, double z) {
+		double best = Double.MAX_VALUE, bestArc = 0;
+		for (int i = 0; i + 1 < xs.length; i++) {
+			double ax = xs[i], az = zs[i], dx = xs[i + 1] - ax, dz = zs[i + 1] - az;
+			double len2 = dx * dx + dz * dz;
+			double t = len2 == 0 ? 0 : Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / len2));
+			double px = ax + t * dx - x, pz = az + t * dz - z;
+			double d = px * px + pz * pz;
+			if (d < best) {
+				best = d;
+				bestArc = arc[i] + t * (arc[i + 1] - arc[i]);
+			}
+		}
+		return bestArc;
+	}
+
+	/** Point on the center line at distance s from the start */
+	public double[] pointAt(double s) {
+		s = Math.max(0, Math.min(length(), s));
+		int i = 0;
+		while (i < arc.length - 2 && arc[i + 1] < s) i++;
+		double seg = arc[i + 1] - arc[i];
+		double t = seg <= 0 ? 0 : (s - arc[i]) / seg;
+		return new double[] {xs[i] + (xs[i + 1] - xs[i]) * t, zs[i] + (zs[i + 1] - zs[i]) * t};
+	}
+
+	/** True for a straight road along the X or Z axis */
+	public boolean axisAligned() {
+		return allSame(xs) || allSame(zs);
+	}
+
+	private static boolean allSame(double[] v) {
+		for (double d : v) if (Math.abs(d - v[0]) > 0.01) return false;
+		return true;
 	}
 
 	public int points() {

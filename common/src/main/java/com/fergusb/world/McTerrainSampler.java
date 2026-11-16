@@ -8,26 +8,47 @@ import net.minecraft.world.level.biome.BiomeResolver;
 import net.minecraft.world.level.chunk.ChunkGenerator;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.levelgen.RandomState;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /** Samples terrain from noise generator without generating chunks */
 public final class McTerrainSampler implements TerrainSampler {
 	private final ChunkGenerator generator;
 	private final RandomState randomState;
 	private final LevelHeightAccessor heightAccessor;
+	private final int seaLevel;
 	private final ThreadLocal<BiomeResolver> biomes;
+	private final Map<Long, Sample> cache = new LinkedHashMap<>(4096, 0.75f, true) {
+		@Override
+		protected boolean removeEldestEntry(Map.Entry<Long, Sample> e) {
+			return size() > 65536;
+		}
+	};
 
 	public McTerrainSampler(ServerLevel level) {
 		this.generator = level.getChunkSource().getGenerator();
 		this.randomState = level.getChunkSource().randomState();
 		this.heightAccessor = level;
+		this.seaLevel = generator.getSeaLevel();
 		this.biomes = ThreadLocal.withInitial(() -> generator.getBiomeSource().createUncachedResolver(randomState));
 	}
 
 	@Override
 	public Sample sample(int x, int z) {
-		int ground = generator.getBaseHeight(x, z, Heightmap.Types.OCEAN_FLOOR_WG, heightAccessor, randomState);
+		long key = ((long) x << 32) ^ (z & 0xFFFFFFFFL);
+		synchronized (cache) {
+			Sample s = cache.get(key);
+			if (s != null) return s;
+		}
 		int surface = generator.getBaseHeight(x, z, Heightmap.Types.WORLD_SURFACE_WG, heightAccessor, randomState);
-		return new Sample(ground, Math.max(ground, surface));
+		int ground = surface > seaLevel + 1
+				? surface
+				: generator.getBaseHeight(x, z, Heightmap.Types.OCEAN_FLOOR_WG, heightAccessor, randomState);
+		Sample s = new Sample(ground, Math.max(ground, surface));
+		synchronized (cache) {
+			cache.put(key, s);
+		}
+		return s;
 	}
 
 	@Override

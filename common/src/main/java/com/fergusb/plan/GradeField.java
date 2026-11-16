@@ -28,7 +28,53 @@ public final class GradeField {
 	}
 
 	public boolean water(double x, double z) {
-		return rawNode((int) Math.round(x / GRID), (int) Math.round(z / GRID)).water();
+		int i = (int) Math.round(x / GRID), j = (int) Math.round(z / GRID);
+		return rawNode(i, j).water() || smallIsland(i, j);
+	}
+
+	/** Land patches of at most this many cells count as ocean */
+	private static final int ISLAND_CELLS = 25;
+	private final Map<Long, Boolean> islands = lru(16384);
+
+	/** True if the land node at (i, j) belongs to a connected land patch smaller than ISLAND_CELLS */
+	public boolean smallIsland(int i, int j) {
+		if (rawNode(i, j).water()) return false;
+		long key = key(i, j);
+		synchronized (islands) {
+			Boolean b = islands.get(key);
+			if (b != null) return b;
+		}
+		java.util.ArrayDeque<long[]> queue = new java.util.ArrayDeque<>();
+		java.util.HashSet<Long> seen = new java.util.HashSet<>();
+		queue.add(new long[] {i, j});
+		seen.add(key);
+		boolean small = true;
+		while (!queue.isEmpty()) {
+			long[] n = queue.poll();
+			if (seen.size() > ISLAND_CELLS) {
+				small = false;
+				break;
+			}
+			int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+			for (int[] d : dirs) {
+				int ni = (int) n[0] + d[0], nj = (int) n[1] + d[1];
+				long nk = key(ni, nj);
+				if (!seen.contains(nk) && !rawNode(ni, nj).water()) {
+					seen.add(nk);
+					queue.add(new long[] {ni, nj});
+				}
+			}
+		}
+		final boolean result = small && seen.size() <= ISLAND_CELLS;
+		synchronized (islands) {
+			if (result) for (long k : seen) islands.put(k, true);
+			else islands.put(key, false);
+		}
+		return result;
+	}
+
+	public boolean smallIslandAt(double x, double z) {
+		return smallIsland((int) Math.round(x / GRID), (int) Math.round(z / GRID));
 	}
 
 	private double node(int i, int j) {

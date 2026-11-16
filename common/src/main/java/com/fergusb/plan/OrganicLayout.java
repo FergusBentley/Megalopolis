@@ -25,19 +25,141 @@ final class OrganicLayout {
 		this.spacing = ValueNoise.lerp(dt, 64, 48);
 	}
 
-	void plan(List<Road> streets, List<Lot> lots) {
+	void plan(List<Road> streets, List<Lot> lots, List<Junction> junctions) {
 		boolean spiderweb = Math.min(bounds.width(), bounds.depth()) > 260 && rng.chance(0.35);
 		if (spiderweb) buildSpiderweb();
 		else buildWeb();
 
 		RoadRouter router = new RoadRouter(planner.grade(), bounds);
+		RoadStyle style = RoadStyle.forStreets(planner.terrain().biome(bounds.centerX(), bounds.centerZ()), dt,
+				planner.fields().condition(bounds.centerX(), bounds.centerZ()), rng.nextDouble());
+		Double[] pins = new Double[nodes.size()];
+		Road[] nodeRoad = new Road[nodes.size()];
+		int[] degree = new int[nodes.size()];
+		List<int[]> routed = new ArrayList<>(); // node pair of each street, in order
 		for (int[] e : edges) {
-			double[] a = nodes.get(e[0]), b = nodes.get(e[1]);
+			int ia = e[0], ib = e[1];
+			if (side.get(ia) != INTERIOR) { // keep any arterial entry at the end
+				int t = ia;
+				ia = ib;
+				ib = t;
+			}
+			double[] a = nodes.get(ia), b = nodes.get(ib);
 			if (Math.hypot(a[0] - b[0], a[1] - b[1]) < 2) continue;
-			double[][] line = router.route(a[0], a[1], b[0], b[1]);
-			streets.add(new Road(line[0], line[1], HALF_WIDTH, Road.Kind.STREET));
+			double[][] line;
+			int sb = side.get(ib);
+			if (sb != INTERIOR) {
+				// Streets can't slide alongside arterial
+				double[] in = inward(sb);
+				double[] ap = {b[0] + in[0] * APPROACH, b[1] + in[1] * APPROACH};
+				if (Math.hypot(a[0] - ap[0], a[1] - ap[1]) < 4) {
+					line = new double[][] {{a[0], b[0]}, {a[1], b[1]}};
+				} else {
+					double[][] r = router.route(a[0], a[1], ap[0], ap[1]);
+					line = append(r, b);
+				}
+			} else {
+				line = router.route(a[0], a[1], b[0], b[1]);
+			}
+			Road road = new Road(line[0], line[1], HALF_WIDTH, Road.Kind.STREET);
+			streets.add(road);
+			routed.add(new int[] {ia, ib});
+			pin(ia, pins);
+			pin(ib, pins);
+			for (int nd : new int[] {ia, ib}) {
+				degree[nd]++;
+				if (nodeRoad[nd] == null) nodeRoad[nd] = road;
+			}
 		}
-		placeLots(streets, lots);
+		relaxPins(streets, routed, pins);
+		for (int k = 0; k < streets.size(); k++) {
+			Road road = streets.get(k);
+			int ia = routed.get(k)[0], ib = routed.get(k)[1];
+			road.profile = RoadProfile.build(planner, road::pointAt, road.length(),
+					RoadProfile.endFlats(road.length(), pins[ia], pins[ib], PAD + 2), RoadProfile.STREET_SLOPE, style,
+					false, road.axisAligned(), rng.nextLong());
+		}
+		// Make streets join cleanly on slopes
+		for (int nd = 0; nd < nodes.size(); nd++) {
+			if (degree[nd] >= 2 && side.get(nd) == INTERIOR && pins[nd] != null) {
+				junctions.add(new Junction(nodes.get(nd)[0], nodes.get(nd)[1], PAD, pins[nd], nodeRoad[nd]));
+			}
+		}
+		// Waterfront roads
+		List<Road> coast = CoastRoads.build(planner, bounds, streets);
+		CoastRoads.profile(planner, coast, streets, style, rng);
+		streets.addAll(coast);
+		List<Obb> taken = new ArrayList<>();
+		for (RoadNetwork.DeadEnd d : RoadNetwork.connect(planner, streets)) {
+			Obb t = RoadNetwork.terminalLot(d);
+			taken.add(t);
+			lots.add(planner.finishLot(t, rng, false, streets));
+		}
+		placeLots(streets, lots, taken);
+	}
+
+	private void relaxPins(List<Road> streets, List<int[]> routed, Double[] pins) {
+		double rate = RoadProfile.STREET_SLOPE * 0.85;
+		for (int pass = 0; pass < 24; pass++) {
+			boolean changed = false;
+			for (int k = 0; k < routed.size(); k++) {
+				int a = routed.get(k)[0], b = routed.get(k)[1];
+				if (pins[a] == null || pins[b] == null) continue;
+				double room = Math.max(1, streets.get(k).length() - 2 * (PAD + 2)) * rate;
+				double diff = pins[b] - pins[a], excess = Math.abs(diff) - room;
+				if (excess <= 0.25) continue;
+				boolean fixA = side.get(a) != INTERIOR, fixB = side.get(b) != INTERIOR;
+				if (fixA && fixB) continue;
+				double sign = Math.signum(diff);
+				if (fixA) pins[b] -= sign * excess;
+				else if (fixB) pins[a] += sign * excess;
+				else {
+					pins[a] += sign * excess / 2;
+					pins[b] -= sign * excess / 2;
+				}
+				changed = true;
+			}
+			if (!changed) break;
+		}
+		for (int n = 0; n < pins.length; n++) if (pins[n] != null) pins[n] = Math.round(pins[n] * 2) / 2.0;
+	}
+
+	private static final double APPROACH = 10;
+
+	private static final double PAD = HALF_WIDTH + 2.5;
+
+	/** Unit vector pointing into the superblock from boundary side */
+	private static double[] inward(int side) {
+		return switch (side) {
+			case 0 -> new double[] {0, 1};
+			case 1 -> new double[] {0, -1};
+			case 2 -> new double[] {1, 0};
+			default -> new double[] {-1, 0};
+		};
+	}
+
+	private static double[][] append(double[][] line, double[] p) {
+		int n = line[0].length;
+		double[] xs = java.util.Arrays.copyOf(line[0], n + 1), zs = java.util.Arrays.copyOf(line[1], n + 1);
+		xs[n] = p[0];
+		zs[n] = p[1];
+		return new double[][] {xs, zs};
+	}
+
+	/** Height every street meeting at a node is pinned to */
+	private Double pin(int node, Double[] pins) {
+		if (pins[node] != null) return pins[node];
+		double[] p = nodes.get(node);
+		int sd = side.get(node);
+		Double h;
+		if (sd == INTERIOR) {
+			h = RoadProfile.junctionHeight(planner, p[0], p[1]);
+		} else {
+			double[] in = inward(sd);
+			h = planner.roadHeightForPin(p[0] - in[0] * 2.5, p[1] - in[1] * 2.5, java.util.List.of());
+		}
+		pins[node] = h;
+		return h;
 	}
 
 	// graphs
@@ -161,15 +283,29 @@ final class OrganicLayout {
 
 	// lots
 
-	private void placeLots(List<Road> streets, List<Lot> lots) {
+	/** A lot shape being laid out */
+	private static final class Candidate {
+		Obb shape;
+		final int frontV;
+		final boolean park;
+
+		Candidate(Obb shape, int frontV, boolean park) {
+			this.shape = shape;
+			this.frontV = frontV;
+			this.park = park;
+		}
+	}
+
+	private void placeLots(List<Road> streets, List<Lot> lots, List<Obb> taken) {
 		List<int[]> boxes = new ArrayList<>();
 		for (Road r : streets) boxes.add(new int[] {r.minX, r.minZ, r.maxX, r.maxZ});
 		SpatialIndex roadIndex = new SpatialIndex(boxes);
-		List<Obb> accepted = new ArrayList<>();
+		List<Obb> accepted = new ArrayList<>(taken);
+		List<Candidate> candidates = new ArrayList<>();
 
 		int minW = (int) ValueNoise.lerp(dt, 8, 12), maxW = (int) ValueNoise.lerp(dt, 16, 30);
 		int maxD = (int) ValueNoise.lerp(dt, 26, 36);
-		double parkChance = 0.02 + 0.05 * (1 - dt);
+		double parkChance = 0.003 + 0.01 * (1 - dt);
 
 		// Pass 1: frontage lots
 		for (Road road : streets) {
@@ -192,8 +328,10 @@ final class OrganicLayout {
 						}
 					}
 					if (lot != null) {
+						double[] n = road.nearest(lot.cx, lot.cz);
+						int frontV = lot.v(n[0], n[1]) < 0 ? -1 : 1;
 						accepted.add(lot);
-						lots.add(planner.finishLot(lot, rng, rng.chance(parkChance)));
+						candidates.add(new Candidate(lot, frontV, rng.chance(parkChance)));
 						cursor += w;
 					} else {
 						cursor += 3;
@@ -203,7 +341,18 @@ final class OrganicLayout {
 		}
 
 		// Pass 2: infill
-		int step = 6;
+		infill(6, 10, maxD, parkChance * 2, streets, roadIndex, accepted, candidates);
+
+		// Pass 3: growth
+		int maxSize = (int) ValueNoise.lerp(dt, 36, 56);
+		for (int i = 0; i < candidates.size(); i++) {
+			grow(candidates.get(i), i, accepted, streets, roadIndex, maxSize);
+		}
+		for (Candidate c : candidates) lots.add(planner.finishLot(c.shape, rng, c.park, streets));
+	}
+
+	private void infill(int step, int minSize, int maxSize, double parkChance, List<Road> streets,
+						SpatialIndex roadIndex, List<Obb> accepted, List<Candidate> candidates) {
 		for (int x = bounds.minX() + step / 2; x <= bounds.maxX(); x += step) {
 			for (int z = bounds.minZ() + step / 2; z <= bounds.maxZ(); z += step) {
 				if (claimed(x, z, accepted)) continue;
@@ -216,17 +365,66 @@ final class OrganicLayout {
 					uz = snapped[1];
 				}
 				Obb lot = null;
-				for (int size = maxD; size >= 10 && lot == null; size -= 4) {
-					int w = Math.max(10, size - rng.nextInt(0, 6));
+				for (int size = maxSize; size >= minSize && lot == null; size -= 2) {
+					int w = Math.max(minSize, size - rng.nextInt(0, 4));
 					Obb c = new Obb(x, z, ux, uz, (w - 1) / 2.0, (size - 1) / 2.0);
 					if (fits(c, streets, roadIndex, accepted)) lot = c;
 				}
 				if (lot != null) {
 					accepted.add(lot);
-					lots.add(planner.finishLot(lot, rng, rng.chance(parkChance * 2)));
+					candidates.add(new Candidate(lot, 0, rng.chance(parkChance)));
 				}
 			}
 		}
+	}
+
+	private void grow(Candidate c, int index, List<Obb> accepted, List<Road> streets, SpatialIndex roadIndex, int maxSize) {
+		int[][] dirs = {{0, 1}, {0, -1}, {1, 0}, {-1, 0}};
+		boolean[] open = new boolean[4];
+		for (int k = 0; k < 4; k++) open[k] = !(dirs[k][0] == 0 && dirs[k][1] == c.frontV);
+		for (int round = 0; round < 24; round++) {
+			boolean grew = false;
+			for (int k = 0; k < 4; k++) {
+				if (!open[k]) continue;
+				Obb next = extend(c.shape, dirs[k][0], dirs[k][1]);
+				if (next.widthU() > maxSize || next.depthV() > maxSize
+						|| !stripFits(next, dirs[k][0], dirs[k][1], streets, roadIndex)
+						|| overlapsOthers(next, index, accepted)) {
+					open[k] = false;
+					continue;
+				}
+				c.shape = next;
+				accepted.set(index, next);
+				grew = true;
+			}
+			if (!grew) break;
+		}
+	}
+
+	private static Obb extend(Obb o, int du, int dv) {
+		double cx = o.cx + 0.5 * (du * o.ux - dv * o.uz);
+		double cz = o.cz + 0.5 * (du * o.uz + dv * o.ux);
+		return new Obb(cx, cz, o.ux, o.uz, o.halfU + 0.5 * Math.abs(du), o.halfV + 0.5 * Math.abs(dv));
+	}
+
+	private boolean stripFits(Obb o, int du, int dv, List<Road> streets, SpatialIndex roadIndex) {
+		double len = du != 0 ? o.halfV : o.halfU;
+		for (double t = -len; t <= len + 1e-6; t += 1) {
+			double[] p = du != 0 ? o.point(du * o.halfU, t) : o.point(t, dv * o.halfV);
+			if (p[0] < bounds.minX() || p[0] > bounds.maxX() || p[1] < bounds.minZ() || p[1] > bounds.maxZ()) return false;
+			for (int k : roadIndex.query((int) Math.round(p[0]), (int) Math.round(p[1]))) {
+				Road r = streets.get(k);
+				if (r.containsWithin(p[0], p[1], r.halfWidth + 0.9)) return false;
+			}
+		}
+		return true;
+	}
+
+	private static boolean overlapsOthers(Obb o, int self, List<Obb> accepted) {
+		for (int k = 0; k < accepted.size(); k++) {
+			if (k != self && accepted.get(k).overlaps(o)) return true;
+		}
+		return false;
 	}
 
 	private static boolean claimed(int x, int z, List<Obb> accepted) {

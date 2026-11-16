@@ -11,6 +11,10 @@ public interface TerrainSampler {
 
 	Sample sample(int x, int z);
 
+	default int seaLevel() {
+		return 63;
+	}
+
 	default String biome(int x, int z) {
 		return "plains";
 	}

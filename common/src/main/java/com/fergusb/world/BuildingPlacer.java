@@ -33,7 +33,7 @@ final class BuildingPlacer {
 	private BuildingPlacer() {}
 
 	/** Places the column at (x, z) */
-	static void place(WorldGenLevel level, BlockPos.MutableBlockPos pos, CityPlanner planner, Lot lot, int x, int z) {
+	static void place(WorldGenLevel level, BlockPos.MutableBlockPos pos, CityPlanner planner, Surface surf, Lot lot, int x, int z) {
 		Obb fp = lot.footprint();
 		BuildingSpec s = lot.spec();
 		int[] cell = BuildingShape.local(fp, x, z);
@@ -51,19 +51,35 @@ final class BuildingPlacer {
 		BuildingSpec.PaletteFamily family = townhouses
 				? FAMILIES[(int) (Hashing.unit(Hashing.hash(s.seed(), 31, unit)) * FAMILIES.length)]
 				: s.palette();
-		Palettes.Palette pal = Palettes.of(family, s.biome());
+		Palettes.Palette pal = Palettes.mixed(family, s.biome(), Hashing.hash(s.seed(), 33, unit));
 		BlockState wood = Palettes.wood(s.biome());
 		if (s.woodAccent()) pal = new Palettes.Palette(pal.wall(), wood, wood, pal.glass(), pal.roof(), pal.weatheredWall(), pal.weatheredGlass());
-		BlockState trim = homey || s.woodAccent() ? wood : pal.trim();
+		boolean woodTrim = s.woodAccent() || homey && Hashing.unit(Hashing.hash(s.seed(), 34)) < 0.5;
+		BlockState trim = woodTrim ? wood : pal.trim();
 		BlockState roofBlock = homey ? HOUSE_ROOFS[(int) (Hashing.unit(Hashing.hash(s.seed(), 32, unit)) * HOUSE_ROOFS.length)] : pal.roof();
 		double cond = lot.condition();
 		double decay = Math.max(0, 0.4 - cond) / 0.4;
 		double weathering = Math.max(0, 0.3 - cond) / 0.3;
 
-		Outside out = lookOutside(planner, lot, x, z);
+		Outside out = lookOutside(planner, surf, lot, x, z);
 
-		set(level, pos.set(x, base - 1, z), FLOOR);
-		fillDown(level, pos, x, base - 2, z);
+		// On slopes the outer walls go down to the ground
+		BlockState below = out.groundWall() ? weathered(pal.wall(), pal.weatheredWall(), 0.5, weathering) : FOUNDATION;
+		set(level, pos.set(x, base - 1, z), out.groundWall() ? below : FLOOR);
+		int fillFrom = base - 2;
+		if (out.groundWall()) {
+			int lowest = base - 1;
+			for (int dx = -1; dx <= 1; dx++) {
+				for (int dz = -1; dz <= 1; dz++) {
+					if (!BuildingShape.insideAt(lot, x + dx, z + dz, 0)) {
+						lowest = Math.min(lowest, (int) Math.floor(surf.heightAt(x + dx, z + dz)) - 1);
+					}
+				}
+			}
+			for (int y = base - 2; y >= lowest; y--) set(level, pos.set(x, y, z), below);
+			fillFrom = lowest - 1;
+		}
+		fillDown(level, pos, x, fillFrom, z, below);
 
 		int lightU = Math.floorMod(lu, 6), lightV = Math.floorMod(lv, 6);
 		int top = base + floors * FH;
@@ -115,12 +131,20 @@ final class BuildingPlacer {
 			}
 		}
 		if (first == null) {
-			for (int dx = -1; dx <= 1; dx += 2) {
-				for (int dz = -1; dz <= 1; dz += 2) {
-					if (!BuildingShape.insideAt(lot, x + dx, z + dz, f)) return new Face(true, 0, 1);
-				}
-			}
 			return null;
+		}
+		if (outX && outZ) {
+			int sx = 0, sz = 0;
+			for (int[] dir : DIRS) {
+				if (BuildingShape.insideAt(lot, x + dir[0], z + dir[1], f)) continue;
+				if (dir[0] != 0) sx = dir[0];
+				else sz = dir[1];
+			}
+			boolean alongZWall = BuildingShape.insideAt(lot, x - sx, z, f) && !BuildingShape.insideAt(lot, x - sx, z + sz, f);
+			boolean alongXWall = BuildingShape.insideAt(lot, x, z - sz, f) && !BuildingShape.insideAt(lot, x + sx, z - sz, f);
+			if (!(alongZWall && alongXWall)) {
+				outX = false;
+			}
 		}
 		// Which building axis the face is perpendicular to decides how windows are counted along it
 		double du = first[0] * fp.ux + first[1] * fp.uz;
@@ -137,8 +161,15 @@ final class BuildingPlacer {
 		boolean groundWall = out.groundWall();
 		// Walls that touch or nearly touch a neighbor stay solid up to the neighbor's height
 		if (groundWall && y <= out.neighborTop()) return ly == 0 ? trim : wall;
-		if (f == 0 && groundWall && out.street()) {
-			if (isDoor(s, face, lu, unit, w) && (ly == 1 || ly == 2)) return AIR;
+		// Solid walls below ground
+		if (groundWall && y < out.groundTop()) return ly == 0 ? trim : wall;
+		// The floor level with the street outside gets the doors and shopfronts
+		int floorWalk = y - ly + 1;
+		boolean streetFloor = out.street() && Math.abs(floorWalk - out.streetY()) <= 1;
+		if (streetFloor && groundWall) {
+			boolean level = floorWalk == out.streetY();
+			boolean runStart = level && out.prevStreetY() != floorWalk;
+			if (level && (isDoor(s, face, lu, unit, w) || runStart) && (ly == 1 || ly == 2)) return AIR;
 			if (s.purpose().hasStorefront()) return ly == 0 ? trim : weathered(pal.glass(), pal.weatheredGlass(), r, weathering);
 		}
 		int i = face.index();
@@ -172,19 +203,29 @@ final class BuildingPlacer {
 
 	// surroundings
 
-	private record Outside(boolean groundWall, boolean street, int neighborTop) {}
+	private record Outside(boolean groundWall, boolean street, int neighborTop, int streetY, int groundTop, int prevStreetY) {}
 
-	private static Outside lookOutside(CityPlanner planner, Lot lot, int x, int z) {
+	private static Outside lookOutside(CityPlanner planner, Surface surf, Lot lot, int x, int z) {
 		boolean wall = false, street = false;
-		int neighborTop = Integer.MIN_VALUE;
+		int neighborTop = Integer.MIN_VALUE, streetY = Integer.MIN_VALUE, groundTop = Integer.MIN_VALUE;
 		int reach = lot.bounds().widthU() - lot.footprint().widthU() + 3; // setback plus a little
+		int[] streetDir = null;
 		for (int[] dir : DIRS) {
 			if (BuildingShape.insideAt(lot, x + dir[0], z + dir[1], 0)) continue;
 			wall = true;
+			groundTop = Math.max(groundTop, (int) Math.ceil(surf.heightAt(x + dir[0], z + dir[1])));
 			for (int k = 1; k <= Math.max(2, reach); k++) {
 				CityPlanner.Cell c = planner.classify(x + dir[0] * k, z + dir[1] * k);
 				if (c.isRoad()) {
-					street = true;
+					CityPlanner.RoadPoint rp = planner.roadPoint(c, x + dir[0] * k, z + dir[1] * k);
+					if ((rp.state() == com.fergusb.plan.RoadProfile.State.GROUND || rp.state() == com.fergusb.plan.RoadProfile.State.ELEVATED)) {
+						street = true;
+						int sy = (int) Math.ceil(rp.height());
+						if (sy > streetY) {
+							streetY = sy;
+							streetDir = dir;
+						}
+					}
 					break;
 				}
 				if (k <= 2 && c.kind() == CityPlanner.Kind.LOT && c.lot() != lot && c.lot().use() == Lot.Use.BUILDING
@@ -193,7 +234,23 @@ final class BuildingPlacer {
 				}
 			}
 		}
-		return new Outside(wall, street, neighborTop);
+		int prevStreetY = Integer.MIN_VALUE;
+		if (streetDir != null) {
+			int px = x + streetDir[1], pz = z - streetDir[0];
+			if (BuildingShape.insideAt(lot, px, pz, 0)) prevStreetY = streetOutside(planner, px, pz, streetDir, reach);
+		}
+		return new Outside(wall, street, neighborTop, streetY, groundTop, prevStreetY);
+	}
+
+	/** Walking height of the ground-level street within reach of (x, z) in direction dir */
+	private static int streetOutside(CityPlanner planner, int x, int z, int[] dir, int reach) {
+		for (int k = 1; k <= Math.max(2, reach); k++) {
+			CityPlanner.Cell c = planner.classify(x + dir[0] * k, z + dir[1] * k);
+			if (!c.isRoad()) continue;
+			CityPlanner.RoadPoint rp = planner.roadPoint(c, x + dir[0] * k, z + dir[1] * k);
+			return (rp.state() == com.fergusb.plan.RoadProfile.State.GROUND || rp.state() == com.fergusb.plan.RoadProfile.State.ELEVATED) ? (int) Math.ceil(rp.height()) : Integer.MIN_VALUE;
+		}
+		return Integer.MIN_VALUE;
 	}
 
 	// roofs
@@ -284,13 +341,12 @@ final class BuildingPlacer {
 		level.setBlock(pos, state, FLAGS);
 	}
 
-	private static void fillDown(WorldGenLevel level, BlockPos.MutableBlockPos pos, int x, int fromY, int z) {
-		for (int y = fromY, n = 0; n < 40; y--, n++) {
+	private static void fillDown(WorldGenLevel level, BlockPos.MutableBlockPos pos, int x, int fromY, int z, BlockState state) {
+		for (int y = fromY, n = 0; n < 48; y--, n++) {
 			pos.set(x, y, z);
 			if (level.isOutsideBuildHeight(y)) return;
-			BlockState existing = level.getBlockState(pos);
-			if (!existing.isAir() && existing.getFluidState().isEmpty() && !existing.canBeReplaced()) return;
-			level.setBlock(pos, FOUNDATION, FLAGS);
+			if (!CityPlacer.fillable(level.getBlockState(pos))) return;
+			level.setBlock(pos, state, FLAGS);
 		}
 	}
 
