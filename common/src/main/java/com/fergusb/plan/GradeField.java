@@ -1,14 +1,11 @@
 package com.fergusb.plan;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
-
 public final class GradeField {
 	public static final int GRID = 16;
 
 	private final TerrainSampler terrain;
-	private final Map<Long, TerrainSampler.Sample> raw = lru(16384);
-	private final Map<Long, Double> smooth = lru(8192);
+	private final PointCache raw = new PointCache(16);
+	private final PointCache smooth = new PointCache(16);
 
 	public GradeField(TerrainSampler terrain) {
 		this.terrain = terrain;
@@ -33,56 +30,91 @@ public final class GradeField {
 	}
 
 	/** Land patches of at most this many cells count as ocean */
-	private static final int ISLAND_CELLS = 25;
-	private final Map<Long, Boolean> islands = lru(16384);
+	public static final int ISLAND_POINTS = 400;
+	public static final int PATCH_CAP = 800;
+	private static final int STEP = 4;
+	private final PointCache patches = new PointCache(20);
+	private final PointCache nodePatches = new PointCache(16);
+	private static final int BIG_NODES = 64;
 
-	/** True if the land node at (i, j) belongs to a connected land patch smaller than ISLAND_CELLS */
-	public boolean smallIsland(int i, int j) {
-		if (rawNode(i, j).water()) return false;
+	public int patchSize(double x, double z) {
+		int i = (int) Math.round(x / STEP), j = (int) Math.round(z / STEP);
 		long key = key(i, j);
-		synchronized (islands) {
-			Boolean b = islands.get(key);
-			if (b != null) return b;
+		long hit = patches.get(key);
+		if (hit != PointCache.MISSING) return (int) hit;
+		if (wet(i, j)) {
+			patches.put(key, 0);
+			return 0;
 		}
-		java.util.ArrayDeque<long[]> queue = new java.util.ArrayDeque<>();
+		java.util.ArrayDeque<int[]> queue = new java.util.ArrayDeque<>();
 		java.util.HashSet<Long> seen = new java.util.HashSet<>();
-		queue.add(new long[] {i, j});
+		queue.add(new int[] {i, j});
 		seen.add(key);
-		boolean small = true;
-		while (!queue.isEmpty()) {
-			long[] n = queue.poll();
-			if (seen.size() > ISLAND_CELLS) {
-				small = false;
+		int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+		boolean big = false;
+		while (!queue.isEmpty() && seen.size() < PATCH_CAP && !big) {
+			int[] n = queue.poll();
+			if ((n[0] & 3) == 0 && (n[1] & 3) == 0 && bigNode(n[0] >> 2, n[1] >> 2)) {
+				big = true;
 				break;
 			}
-			int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
 			for (int[] d : dirs) {
-				int ni = (int) n[0] + d[0], nj = (int) n[1] + d[1];
-				long nk = key(ni, nj);
-				if (!seen.contains(nk) && !rawNode(ni, nj).water()) {
-					seen.add(nk);
-					queue.add(new long[] {ni, nj});
+				int ai = n[0] + d[0], aj = n[1] + d[1];
+				long ak = key(ai, aj);
+				if (!seen.contains(ak) && !wet(ai, aj)) {
+					seen.add(ak);
+					queue.add(new int[] {ai, aj});
 				}
 			}
 		}
-		final boolean result = small && seen.size() <= ISLAND_CELLS;
-		synchronized (islands) {
-			if (result) for (long k : seen) islands.put(k, true);
-			else islands.put(key, false);
+		int size = big ? PATCH_CAP : Math.min(seen.size(), PATCH_CAP);
+		for (long k : seen) patches.put(k, size);
+		return size;
+	}
+
+	private boolean bigNode(int i, int j) {
+		if (rawNode(i, j).water()) return false;
+		long key = key(i, j);
+		long hit = nodePatches.get(key);
+		if (hit != PointCache.MISSING) return hit != 0;
+		java.util.ArrayDeque<int[]> queue = new java.util.ArrayDeque<>();
+		java.util.HashSet<Long> seen = new java.util.HashSet<>();
+		queue.add(new int[] {i, j});
+		seen.add(key);
+		int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+		while (!queue.isEmpty() && seen.size() < BIG_NODES) {
+			int[] n = queue.poll();
+			for (int[] d : dirs) {
+				int ai = n[0] + d[0], aj = n[1] + d[1];
+				long ak = key(ai, aj);
+				if (!seen.contains(ak) && !rawNode(ai, aj).water()) {
+					seen.add(ak);
+					queue.add(new int[] {ai, aj});
+				}
+			}
 		}
+		boolean result = seen.size() >= BIG_NODES;
+		for (long k : seen) nodePatches.put(k, result ? 1 : 0);
 		return result;
 	}
 
+	private boolean wet(int i, int j) {
+		return terrain.sample(i * STEP, j * STEP).water();
+	}
+
 	public boolean smallIslandAt(double x, double z) {
-		return smallIsland((int) Math.round(x / GRID), (int) Math.round(z / GRID));
+		int n = patchSize(x, z);
+		return n > 0 && n <= ISLAND_POINTS;
+	}
+
+	public boolean smallIsland(int i, int j) {
+		return smallIslandAt(i * GRID, j * GRID);
 	}
 
 	private double node(int i, int j) {
 		long key = key(i, j);
-		synchronized (smooth) {
-			Double v = smooth.get(key);
-			if (v != null) return v;
-		}
+		long hit = smooth.get(key);
+		if (hit != PointCache.MISSING) return Double.longBitsToDouble(hit);
 		double sum = 0;
 		for (int di = -1; di <= 1; di++) {
 			for (int dj = -1; dj <= 1; dj++) {
@@ -90,35 +122,20 @@ public final class GradeField {
 			}
 		}
 		double v = sum / 9.0;
-		synchronized (smooth) {
-			smooth.put(key, v);
-		}
+		smooth.put(key, Double.doubleToRawLongBits(v));
 		return v;
 	}
 
 	private TerrainSampler.Sample rawNode(int i, int j) {
 		long key = key(i, j);
-		synchronized (raw) {
-			TerrainSampler.Sample s = raw.get(key);
-			if (s != null) return s;
-		}
+		long hit = raw.get(key);
+		if (hit != PointCache.MISSING) return new TerrainSampler.Sample((int) (hit >> 32), (int) hit);
 		TerrainSampler.Sample s = terrain.sample(i * GRID, j * GRID);
-		synchronized (raw) {
-			raw.put(key, s);
-		}
+		raw.put(key, ((long) s.groundY() << 32) | (s.surfaceY() & 0xFFFFFFFFL));
 		return s;
 	}
 
 	private static long key(int i, int j) {
-		return ((long) i << 32) ^ (j & 0xFFFFFFFFL);
-	}
-
-	private static <V> Map<Long, V> lru(int max) {
-		return new LinkedHashMap<>(256, 0.75f, true) {
-			@Override
-			protected boolean removeEldestEntry(Map.Entry<Long, V> e) {
-				return size() > max;
-			}
-		};
+		return Hashing.pack(i, j);
 	}
 }

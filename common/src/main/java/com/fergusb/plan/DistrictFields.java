@@ -18,8 +18,19 @@ public final class DistrictFields {
 		this.themeNoise = new ValueNoise(Hashing.hash(seed, 104), 700, 2);
 	}
 
+	private static final double[] THEME_CUTS = {-0.306, -0.094, 0.098, 0.310};
+
+	public int theme(double x, double z) {
+		// Cut at the noise's quintiles, so each theme covers about a fifth of the land. (Stretching
+		// the noise to 0..1 instead piled a third of it into each of the two end themes.)
+		double n = themeNoise.sample(x, z);
+		int t = 0;
+		for (double cut : THEME_CUTS) if (n >= cut) t++;
+		return t;
+	}
+
 	public double organic(double x, double z) {
-		return clamp01(0.45 + organicNoise.sample(x, z) - (downtown(x, z) - 0.5) * 0.6);
+		return clamp01(0.45 + organicNoise.sample(x, z) * 1.0 - (downtown(x, z) - 0.5) * 0.6);
 	}
 
 	public double downtown(double x, double z) {
@@ -29,11 +40,6 @@ public final class DistrictFields {
 	public double condition(double x, double z) {
 		double d = downtown(x, z);
 		return clamp01(1.1 + conditionNoise.sample(x, z) * 1.64 + (d - 0.5) * 0.1);
-	}
-
-	public int theme(double x, double z) {
-		double t = clamp01(0.5 + themeNoise.sample(x, z) * 1.8);
-		return Math.min(4, (int) (t * 5));
 	}
 
 	static double clamp01(double v) {

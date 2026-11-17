@@ -11,7 +11,8 @@ public final class VanillaRemovals {
 			"brown_mushroom_", "red_mushroom_", "pale_garden_", "pale_moss_patch", "dark_forest_vegetation",
 			"mushroom_island_vegetation"};
 	private static final Set<String> EXACT = Set.of(
-			"vines", "forest_rock", "desert_well", "ice_spike", "ice_patch", "lake_lava_surface", "rooted_azalea_tree");
+			"vines", "forest_rock", "desert_well", "ice_spike", "ice_patch", "lake_lava_surface", "rooted_azalea_tree",
+			"dripstone_cluster", "large_dripstone");
 	private static final Set<String> KEEP = Set.of("patch_waterlily");
 
 	private VanillaRemovals() {}

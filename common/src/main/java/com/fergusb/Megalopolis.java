@@ -32,6 +32,11 @@ public final class Megalopolis {
 		platform.addOverworldFeature(GenerationStep.Decoration.TOP_LAYER_MODIFICATION, CITY_PLACED);
 
 		platform.removeOverworldFeatures(VanillaRemovals::shouldRemove);
+		var dripstoneCaves = ResourceKey.create(Registries.BIOME, net.minecraft.resources.Identifier.withDefaultNamespace("dripstone_caves"));
+		platform.addBiomeFeature(dripstoneCaves, GenerationStep.Decoration.UNDERGROUND_DECORATION,
+				ResourceKey.create(Registries.PLACED_FEATURE, id("dripstone_cluster_deep")));
+		platform.addBiomeFeature(dripstoneCaves, GenerationStep.Decoration.UNDERGROUND_DECORATION,
+				ResourceKey.create(Registries.PLACED_FEATURE, id("large_dripstone_deep")));
 
 		platform.registerCommands(MegalopolisCommands::register);
 		LOGGER.info("Megalopolis loaded");

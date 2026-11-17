@@ -1,6 +1,11 @@
 package com.fergusb.plan;
 
-import com.fergusb.plan.BuildingSpec.*;
+import com.fergusb.plan.BuildingSpec.Massing;
+import com.fergusb.plan.BuildingSpec.PaletteFamily;
+import com.fergusb.plan.BuildingSpec.Purpose;
+import com.fergusb.plan.BuildingSpec.Roof;
+import com.fergusb.plan.BuildingSpec.Shape;
+import com.fergusb.plan.BuildingSpec.WindowStyle;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -8,11 +13,11 @@ import java.util.List;
 /** Decides what each building is and how it looks */
 final class BuildingDesigner {
 	private static final PaletteFamily[][] THEMES = {
-			{PaletteFamily.WHITE_MODERN, PaletteFamily.QUARTZ_GLASS, PaletteFamily.BLUE_ACCENT},
-			{PaletteFamily.DARK_GLASS, PaletteFamily.SLATE, PaletteFamily.BLACKSTONE},
-			{PaletteFamily.WARM_TERRACOTTA, PaletteFamily.SANDSTONE, PaletteFamily.RED_ACCENT},
-			{PaletteFamily.COPPER, PaletteFamily.TEAL_TECH, PaletteFamily.PRISMARINE},
-			{PaletteFamily.PASTEL, PaletteFamily.PURPUR, PaletteFamily.TUFF}};
+			{PaletteFamily.WHITE_MODERN, PaletteFamily.QUARTZ_GLASS, PaletteFamily.BLUE_ACCENT, PaletteFamily.STEEL_BLUE},
+			{PaletteFamily.DARK_GLASS, PaletteFamily.SLATE, PaletteFamily.BLACKSTONE, PaletteFamily.BASALT},
+			{PaletteFamily.WARM_TERRACOTTA, PaletteFamily.SANDSTONE, PaletteFamily.RED_ACCENT, PaletteFamily.RED_SANDSTONE, PaletteFamily.GRANITE, PaletteFamily.OCHRE},
+			{PaletteFamily.COPPER, PaletteFamily.TEAL_TECH, PaletteFamily.PRISMARINE, PaletteFamily.SULFUR, PaletteFamily.CINNABAR},
+			{PaletteFamily.PASTEL, PaletteFamily.PURPUR, PaletteFamily.TUFF, PaletteFamily.LILAC, PaletteFamily.RESIN}};
 
 	private BuildingDesigner() {}
 
@@ -163,7 +168,7 @@ final class BuildingDesigner {
 
 	private static PaletteFamily palette(Rng rng, DistrictFields fields, Obb fp, String biome, double condition) {
 		if (condition < 0.3 && rng.chance(0.85)) {
-			return rng.chance(0.5) ? PaletteFamily.DINGY_GRAY : PaletteFamily.DINGY_BROWN;
+			return pick(rng, PaletteFamily.DINGY_GRAY, PaletteFamily.DINGY_BROWN, PaletteFamily.DINGY_DEEPSLATE);
 		}
 		double r = rng.nextDouble();
 		PaletteFamily[] options;

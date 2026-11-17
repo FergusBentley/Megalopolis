@@ -39,6 +39,11 @@ public record BuildingSpec(Purpose purpose, Shape shape, Massing massing, Roof r
 		COPPER, TEAL_TECH, PRISMARINE,
 		PASTEL, PURPUR, TUFF,
 		MESA, FROST, VERDANT, MUD, TIMBER,
-		DINGY_GRAY, DINGY_BROWN // run-down districts
+		CINNABAR, SULFUR, LOGWORK, BASALT, RED_SANDSTONE, RESIN, GRANITE, LILAC, OCHRE, STEEL_BLUE,
+		DINGY_GRAY, DINGY_BROWN, DINGY_DEEPSLATE; // run-down districts
+
+		public boolean dingy() {
+			return name().startsWith("DINGY");
+		}
 	}
 }

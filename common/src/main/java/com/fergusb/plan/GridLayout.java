@@ -15,6 +15,14 @@ final class GridLayout {
 		this.rng = rng;
 		this.diagonals = diagonals;
 	}
+	private List<Road> external = List.of(); // links to neighboring superblocks
+	private boolean streetsOnly;
+
+	GridLayout options(List<Road> external, boolean streetsOnly) {
+		this.external = external;
+		this.streetsOnly = streetsOnly;
+		return this;
+	}
 
 	void plan(List<Road> streets, List<Lot> lots, List<Junction> junctions) {
 		List<Rect> blocks = new ArrayList<>();
@@ -28,8 +36,12 @@ final class GridLayout {
 		List<Road> coast = CoastRoads.build(planner, bounds, streets);
 		CoastRoads.profile(planner, coast, streets, style, rng);
 		streets.addAll(coast);
+		if (streetsOnly) return;
+		streets.addAll(external);
+		for (Road link : external) RoadNetwork.clearStraysUnder(streets, link);
 		List<Obb> taken = new ArrayList<>();
-		for (RoadNetwork.DeadEnd d : RoadNetwork.connect(planner, streets)) {
+		List<Road> links = new ArrayList<>(external);
+		for (RoadNetwork.DeadEnd d : RoadNetwork.connect(planner, streets, bounds, links)) {
 			Obb t = RoadNetwork.terminalLot(d);
 			taken.add(t);
 			lots.add(planner.finishLot(t, rng, false, streets));
@@ -38,6 +50,7 @@ final class GridLayout {
 		for (Rect block : blocks) makeLots(block, blockLots, streets);
 		List<Road> through = new ArrayList<>(coast);
 		through.addAll(diag);
+		through.addAll(links);
 		for (Lot lot : blockLots) {
 			if (!CoastRoads.overlaps(lot.bounds(), through, taken)) lots.add(lot);
 		}
@@ -192,7 +205,7 @@ final class GridLayout {
 
 	private void makeLots(Rect block, List<Lot> out, List<Road> streets) {
 		double dt = planner.fields().downtown(block.centerX(), block.centerZ());
-		if (rng.chance(0.006 + 0.015 * (1 - dt))) {
+		if (planner.parkRoll(block.centerX(), block.centerZ(), 0.006 + 0.015 * (1 - dt))) {
 			out.add(planner.finishLot(Obb.ofRect(block), rng, true, streets));
 			return;
 		}

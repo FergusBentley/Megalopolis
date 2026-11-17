@@ -1,15 +1,18 @@
 package com.fergusb.world;
 
-import com.fergusb.plan.*;
+import com.fergusb.plan.BuildingShape;
+import com.fergusb.plan.BuildingSpec;
+import com.fergusb.plan.CityPlanner;
+import com.fergusb.plan.Lot;
 import net.minecraft.core.BlockPos;
+import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.chunk.ChunkGenerator;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.WorldGenLevel;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.levelgen.Heightmap;
-import net.minecraft.util.RandomSource;
-import net.minecraft.world.level.chunk.ChunkGenerator;
 
 /** Writes one chunk's slice of the plan */
 public final class CityPlacer {

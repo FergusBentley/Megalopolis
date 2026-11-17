@@ -9,6 +9,18 @@ public final class Road {
 	public final Kind kind;
 	public final int minX, minZ, maxX, maxZ;
 	public RoadProfile profile;
+	public boolean coastal;
+	public boolean external; // link between two superblocks
+	public boolean link;
+
+	Road copy() {
+		Road r = new Road(xs, zs, halfWidth, kind);
+		r.profile = profile == null ? null : profile.copy();
+		r.coastal = coastal;
+		r.external = external;
+		r.link = link;
+		return r;
+	}
 
 	public Road(double[] xs, double[] zs, double halfWidth, Kind kind) {
 		this.xs = xs;

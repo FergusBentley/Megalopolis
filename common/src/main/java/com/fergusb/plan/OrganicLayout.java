@@ -24,6 +24,14 @@ final class OrganicLayout {
 		this.dt = planner.fields().downtown(bounds.centerX(), bounds.centerZ());
 		this.spacing = ValueNoise.lerp(dt, 64, 48);
 	}
+	private List<Road> external = List.of(); // links to neighboring superblocks
+	private boolean streetsOnly;
+
+	OrganicLayout options(List<Road> external, boolean streetsOnly) {
+		this.external = external;
+		this.streetsOnly = streetsOnly;
+		return this;
+	}
 
 	void plan(List<Road> streets, List<Lot> lots, List<Junction> junctions) {
 		boolean spiderweb = Math.min(bounds.width(), bounds.depth()) > 260 && rng.chance(0.35);
@@ -89,8 +97,11 @@ final class OrganicLayout {
 		List<Road> coast = CoastRoads.build(planner, bounds, streets);
 		CoastRoads.profile(planner, coast, streets, style, rng);
 		streets.addAll(coast);
+		if (streetsOnly) return;
+		streets.addAll(external);
+		for (Road link : external) RoadNetwork.clearStraysUnder(streets, link);
 		List<Obb> taken = new ArrayList<>();
-		for (RoadNetwork.DeadEnd d : RoadNetwork.connect(planner, streets)) {
+		for (RoadNetwork.DeadEnd d : RoadNetwork.connect(planner, streets, bounds, null)) {
 			Obb t = RoadNetwork.terminalLot(d);
 			taken.add(t);
 			lots.add(planner.finishLot(t, rng, false, streets));
@@ -331,7 +342,7 @@ final class OrganicLayout {
 						double[] n = road.nearest(lot.cx, lot.cz);
 						int frontV = lot.v(n[0], n[1]) < 0 ? -1 : 1;
 						accepted.add(lot);
-						candidates.add(new Candidate(lot, frontV, rng.chance(parkChance)));
+						candidates.add(new Candidate(lot, frontV, planner.parkRoll(lot.cx, lot.cz, parkChance)));
 						cursor += w;
 					} else {
 						cursor += 3;
@@ -372,7 +383,7 @@ final class OrganicLayout {
 				}
 				if (lot != null) {
 					accepted.add(lot);
-					candidates.add(new Candidate(lot, 0, rng.chance(parkChance)));
+					candidates.add(new Candidate(lot, 0, planner.parkRoll(lot.cx, lot.cz, parkChance)));
 				}
 			}
 		}

@@ -25,6 +25,12 @@ public final class RoadMap {
 		return i >= 0 && h2[i] != EMPTY && STATES[state[i]] != RoadProfile.State.NONE;
 	}
 
+	/** True if the column is inside the map and has a street on it */
+	public boolean covers(int x, int z) {
+		int i = index(x, z);
+		return i >= 0 && h2[i] != EMPTY;
+	}
+
 	public double height(int x, int z) {
 		int i = index(x, z);
 		return i < 0 || h2[i] == EMPTY ? 0 : h2[i] / 2.0;
@@ -57,13 +63,16 @@ public final class RoadMap {
 				}
 			}
 		}
-		for (Road road : streets) {
+		java.util.List<Road> order = new java.util.ArrayList<>(streets);
+		order.sort((a, b) -> Double.compare(b.halfWidth, a.halfWidth));
+		for (Road road : order) {
 			for (int x = Math.max(m.x0, road.minX); x <= Math.min(bounds.maxX(), road.maxX); x++) {
 				for (int z = Math.max(m.z0, road.minZ); z <= Math.min(bounds.maxZ(), road.maxZ); z++) {
 					int i = m.index(x, z);
-					if (m.h2[i] != EMPTY || !road.contains(x, z)) continue;
+					if (m.h2[i] != EMPTY && STATES[m.state[i]] != RoadProfile.State.NONE || !road.contains(x, z)) continue;
 					double s = road.arcAt(x, z);
 					RoadProfile.State st = road.profile.state(s);
+					if (m.h2[i] != EMPTY && st == RoadProfile.State.NONE) continue;
 					h[i] = road.profile.height(s);
 					m.h2[i] = (short) Math.round(h[i] * 2);
 					m.state[i] = (byte) st.ordinal();

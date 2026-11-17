@@ -14,6 +14,8 @@ import java.util.function.Predicate;
 public interface Platform {
 	<T> void register(Registry<T> registry, Identifier id, T value);
 	void addOverworldFeature(GenerationStep.Decoration step, ResourceKey<PlacedFeature> feature);
+	void addBiomeFeature(ResourceKey<net.minecraft.world.level.biome.Biome> biome, GenerationStep.Decoration step, ResourceKey<PlacedFeature> feature);
+
 	void removeOverworldFeatures(Predicate<Identifier> shouldRemove);
 	void registerCommands(Consumer<CommandDispatcher<CommandSourceStack>> registrar);
 }

@@ -26,6 +26,7 @@ final class ParkDecorator {
 		int x0 = surf.x0, z0 = surf.z0;
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 		boolean[][] planted = new boolean[16][16];
+		int[][] wildTop = new int[16][16];
 		String chunkBiome = planner.terrain().biome(x0 + 8, z0 + 8);
 		java.util.Map<Lot, String> lotBiomes = new java.util.IdentityHashMap<>(); // one lookup per lot per chunk
 
@@ -41,6 +42,18 @@ final class ParkDecorator {
 				String biome = cell.lot() != null ? lotBiomes.computeIfAbsent(cell.lot(), l -> biome(planner, l)) : chunkBiome;
 				long h = Hashing.hash(planner.seed(), x, z, 91);
 				double r = Hashing.unit(h);
+				if (kind == Kind.WILD) {
+					int top = naturalTop(level, pos, x, z, y);
+					if (top == 0) continue;
+					BlockState under = level.getBlockState(pos.set(x, top - 1, z));
+					boolean soil = under.is(Blocks.GRASS_BLOCK) || under.is(Blocks.PODZOL)
+							|| isSandy(biome) && under.is(net.minecraft.tags.BlockTags.SAND);
+					if (!soil) continue;
+					wildTop[dx][dz] = top;
+					BlockState plant = cover(biome, r / 0.8, h);
+					if (plant != null) CityPlacer.set(level, pos.set(x, top, z), plant);
+					continue;
+				}
 
 				if (kind == Kind.PARK && onPath(cell.lot(), x, z)) {
 					CityPlacer.set(level, pos.set(x, y - 1, z), Blocks.DIRT_PATH.defaultBlockState());
@@ -70,17 +83,18 @@ final class ParkDecorator {
 				int dz = Math.min(15 - CANOPY, cv + (int) (Hashing.unit(Hashing.hash(h, 1)) * 4));
 				CityPlanner.Cell cell = surf.cell(dx, dz);
 				Kind kind = kind(cell, surf, dx, dz);
-				double chance = kind == Kind.PARK ? 0.7 : kind == Kind.GREEN ? 0.3 : 0;
+				double chance = kind == Kind.PARK ? 0.7 : kind == Kind.GREEN ? 0.3 : kind == Kind.WILD ? 0.3 : 0;
 				if (Hashing.unit(Hashing.hash(h, 2)) >= chance || planted[dx][dz]) continue;
 				if (!clearAround(level, pos, surf, water, dx, dz, kind)) continue;
+				if (kind == Kind.WILD && !wildGround(wildTop, dx, dz)) continue;
 				int x = x0 + dx, z = z0 + dz;
 				String biome = cell.lot() != null ? lotBiomes.computeIfAbsent(cell.lot(), l -> biome(planner, l)) : chunkBiome;
 				String tree = tree(biome, Hashing.unit(Hashing.hash(h, 3)));
 				if (tree == null) {
-					if (isSandy(biome)) cactus(level, pos, x, surf.groundY(dx, dz), z, h);
+					if (isSandy(biome)) cactus(level, pos, x, kind == Kind.WILD ? wildTop[dx][dz] : surf.groundY(dx, dz), z, h);
 					continue;
 				}
-				int y = surf.groundY(dx, dz);
+				int y = kind == Kind.WILD ? wildTop[dx][dz] : surf.groundY(dx, dz);
 				CityPlacer.set(level, pos.set(x, y, z), Blocks.AIR.defaultBlockState()); // clear the cover
 				features.getOptional(Identifier.withDefaultNamespace(tree))
 						.ifPresent(f -> f.place(level, generator, random, new BlockPos(x, y, z)));
@@ -88,13 +102,37 @@ final class ParkDecorator {
 		}
 	}
 
-	private enum Kind { NONE, PARK, GREEN, OPEN }
+	private enum Kind { NONE, PARK, GREEN, OPEN, WILD }
+
+	private static int naturalTop(WorldGenLevel level, BlockPos.MutableBlockPos pos, int x, int z, int near) {
+		int hi = Math.min(level.getMaxY(), near + 32), lo = Math.max(level.getMinY() + 1, near - 32);
+		for (int y = hi; y >= lo; y--) {
+			BlockState b = level.getBlockState(pos.set(x, y, z));
+			if (b.isAir()) continue;
+			if (!b.getFluidState().isEmpty() || b.is(net.minecraft.tags.BlockTags.ICE)) return 0;
+			return y + 1;
+		}
+		return 0;
+	}
+
+	private static boolean wildGround(int[][] top, int dx, int dz) {
+		int y = top[dx][dz];
+		if (y == 0) return false;
+		for (int ox = -2; ox <= 2; ox++) {
+			for (int oz = -2; oz <= 2; oz++) {
+				int t = top[dx + ox][dz + oz];
+				if (t == 0 || Math.abs(t - y) > 1) return false;
+			}
+		}
+		return true;
+	}
 
 	private static boolean wet(WorldGenLevel level, BlockPos.MutableBlockPos pos, Surface surf, boolean[][] water, int dx, int dz) {
 		return (water[dx + 1][dz + 1] && !surf.filled(dx, dz)) || CityPlacer.surfaceWater(level, pos, surf.x0 + dx, surf.z0 + dz);
 	}
 
 	private static Kind kind(CityPlanner.Cell cell, Surface surf, int dx, int dz) {
+		if (surf.natural(dx, dz) && !surf.builtRoad(dx, dz)) return Kind.WILD;
 		if (cell.kind() == CityPlanner.Kind.LOT) {
 			if (cell.lot().use() == Lot.Use.PARK) return Kind.PARK;
 			return Kind.NONE;

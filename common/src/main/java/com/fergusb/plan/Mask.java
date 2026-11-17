@@ -32,6 +32,23 @@ public final class Mask {
 		return bits.cardinality();
 	}
 
+	public Mask opened() {
+		Mask out = new Mask(minX, minZ, width, depth);
+		for (int x = minX; x < minX + width; x++) {
+			for (int z = minZ; z < minZ + depth; z++) {
+				if (!get(x, z)) continue;
+				boolean keep = false;
+				for (int a = -1; a <= 0 && !keep; a++) {
+					for (int b = -1; b <= 0 && !keep; b++) {
+						keep = get(x + a, z + b) && get(x + a + 1, z + b) && get(x + a, z + b + 1) && get(x + a + 1, z + b + 1);
+					}
+				}
+				if (keep) out.set(x, z);
+			}
+		}
+		return out.size() >= 4 ? out : this;
+	}
+
 	public Obb box() {
 		return Obb.ofRect(new Rect(minX, minZ, minX + width - 1, minZ + depth - 1));
 	}

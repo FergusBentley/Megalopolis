@@ -8,12 +8,16 @@ public final class RoadProfile {
 	public enum State { GROUND, BRIDGE, TUNNEL, ELEVATED, NONE }
 	public enum Railing { BLOCKS, CRENEL, FENCE, WALL }
 
-	public record Bridge(double deck, Railing railing, int pillar) {}
+	public record Bridge(double deck, Railing railing, int pillar, boolean grand) {}
 	public record Flat(double s0, double s1, double h) {}
 
 	public static final double STREET_SLOPE = 0.34; // steepest allowed
 	public static final int MAX_SPAN = 64, MAX_SPAN_ARTERIAL = 128; // longest bridge allowed
+	public static final int GRAND_SPAN = 320;
+	private static final double GRAND_CLEARANCE = 10;
+	private static final double GRAND_RISE = 0.25;
 	private static final int MIN_ISLAND_PIECE = 48; // minimum size island to be built on
+	private static final int MIN_ARTERIAL_PIECE = 192;
 	private static final double MAX_CUT = 4;
 	private static final double TUNNEL_CUT = 12;
 	private static final double TUNNEL_DEPTH = 14;
@@ -29,14 +33,29 @@ public final class RoadProfile {
 	public final RoadStyle style;
 	public final Railing railing;
 	public final String biome;
+	private final java.util.BitSet minor;
+	public static final double MINOR_HALF_WIDTH = 2.5;
 
 	private RoadProfile(double[] h, State[] state, Bridge[] bridge, RoadStyle style, Railing railing, String biome) {
+		this(h, state, bridge, style, railing, biome, null);
+	}
+
+	private RoadProfile(double[] h, State[] state, Bridge[] bridge, RoadStyle style, Railing railing, String biome, java.util.BitSet minor) {
+		this.minor = minor;
 		this.h = h;
 		this.state = state;
 		this.bridge = bridge;
 		this.style = style;
 		this.railing = railing;
 		this.biome = biome;
+	}
+
+	RoadProfile copy() {
+		return new RoadProfile(h.clone(), state.clone(), bridge.clone(), style, railing, biome, minor == null ? null : (java.util.BitSet) minor.clone());
+	}
+
+	public boolean isMinor(double s) {
+		return minor != null && minor.get(index(s));
 	}
 
 	public double height(double s) {
@@ -78,6 +97,12 @@ public final class RoadProfile {
 
 	static RoadProfile build(CityPlanner planner, DoubleFunction<double[]> pointAt, double length,
 			List<Flat> flats, double maxSlope, RoadStyle style, boolean arterial, boolean straight, long seed) {
+		return build(planner, pointAt, length, flats, maxSlope, style, arterial, straight, seed, arterial ? GRAND_SPAN : MAX_SPAN, null);
+	}
+
+	static RoadProfile build(CityPlanner planner, DoubleFunction<double[]> pointAt, double length,
+			List<Flat> flats, double maxSlope, RoadStyle style, boolean arterial, boolean straight, long seed, int maxSpan,
+			Railing forcedRailing) {
 		GradeField grade = planner.grade();
 		TerrainSampler terrain = planner.terrain();
 		int sea = terrain.seaLevel();
@@ -119,7 +144,7 @@ public final class RoadProfile {
 		Double startJoin = null, endJoin = null;
 		for (Flat f : flats) {
 			if (f.s0() <= 0.5) startJoin = f.h();
-			if (f.s1() >= n - 1.5) endJoin = f.h();
+			if (f.s1() >= length - 0.5) endJoin = f.h();
 		}
 
 		// Near water, roads sit at least 2 blocks above sea level
@@ -140,11 +165,13 @@ public final class RoadProfile {
 		State[] state = new State[n];
 		Bridge[] bridges = new Bridge[n];
 		boolean[] pinned = new boolean[n];
+		boolean[] minorRun = new boolean[n];
 		for (int i = 0; i < n; i++) state[i] = State.GROUND;
-		int maxSpan = arterial ? MAX_SPAN_ARTERIAL : MAX_SPAN;
+		int ordinarySpan = arterial ? MAX_SPAN_ARTERIAL : MAX_SPAN;
 		Rng rr = new Rng(Hashing.hash(seed, 77));
 		Railing railing;
-		if (arterial) railing = rr.chance(0.65) ? Railing.WALL : Railing.CRENEL;
+		if (forcedRailing != null) railing = forcedRailing;
+		else if (arterial) railing = rr.chance(0.65) ? Railing.WALL : Railing.CRENEL;
 		else {
 			double r = rr.nextDouble();
 			railing = r < 0.45 ? Railing.FENCE : r < 0.75 ? Railing.WALL : Railing.CRENEL;
@@ -161,14 +188,36 @@ public final class RoadProfile {
 			while (i < n && water[i]) i++;
 			int b = i - 1;
 			boolean landBefore = a > 0 || startJoin != null, landAfter = b < n - 1 || endJoin != null;
+			if (arterial && a == 0 && landBefore) landBefore = landBeyond(terrain, grade, pointAt, 0, -1, maxSpan - (b - a + 1));
+			if (arterial && b == n - 1 && landAfter) landAfter = landBeyond(terrain, grade, pointAt, length, 1, maxSpan - (b - a + 1));
 			if (landBefore && landAfter && b - a + 1 <= maxSpan) {
 				double before = a > 0 ? raw[a - 1] : startJoin, after = b < n - 1 ? raw[b + 1] : endJoin;
+				boolean joinA = a == 0, joinB = b == n - 1;
+				double endA = joinA ? Math.round(Math.max(sea + 2, before) * 2) / 2.0 : Math.ceil(Math.max(sea + 2, before));
+				double endB = joinB ? Math.round(Math.max(sea + 2, after) * 2) / 2.0 : Math.ceil(Math.max(sea + 2, after));
 				double deck = Math.ceil(Math.max(sea + 2, Math.max(before, after)));
-				Bridge bridge = designBridge(pointAt, a, b, deck, floor, sea, arterial, straight, railing);
+				boolean grand = b - a + 1 > ordinarySpan;
+				double reachUp = (b - a + 2) * maxSlope;
+				if (!grand && joinB && !joinA) endA = Math.max(Math.max(sea + 2, endB - reachUp), Math.min(endA, endB + reachUp));
+				if (!grand && joinA && !joinB) endB = Math.max(Math.max(sea + 2, endA - reachUp), Math.min(endB, endA + reachUp));
+				endA = Math.round(endA * 2) / 2.0;
+				endB = Math.round(endB * 2) / 2.0;
+				boolean ramp = !grand && (joinA || joinB) && Math.abs(endA - endB) > 0.25;
+				if (!grand && !ramp && (joinA || joinB)) deck = joinA ? endA : endB; // level at the junction's height
+				Bridge bridge = designBridge(pointAt, a, b, deck, floor, sea, arterial, straight, railing, grand, ramp);
+				double top = Math.max(Math.max(endA, endB), sea + GRAND_CLEARANCE);
 				for (int k = a; k <= b; k++) {
 					state[k] = State.BRIDGE;
 					bridges[k] = bridge;
-					raw[k] = deck;
+					if (grand) {
+						double up = Math.min(endA + GRAND_RISE * (k - a + 1), endB + GRAND_RISE * (b - k + 1));
+						raw[k] = Math.round(Math.min(top, up) * 2) / 2.0;
+					} else if (ramp) {
+						double f = (k - a + 1) / (double) (b - a + 2);
+						raw[k] = Math.round((endA + (endB - endA) * f) * 2) / 2.0;
+					} else {
+						raw[k] = deck;
+					}
 					pinned[k] = true;
 				}
 			} else {
@@ -187,7 +236,12 @@ public final class RoadProfile {
 				while (i < n && state[i] != State.NONE) i++;
 				int b = i - 1;
 				boolean cutOff = a > 0 && b < n - 1;
-				if (cutOff && b - a + 1 < MIN_ISLAND_PIECE) {
+				if (cutOff && arterial && b - a + 1 >= MIN_ISLAND_PIECE && b - a + 1 < MIN_ARTERIAL_PIECE) {
+					// Too short for an arterial, long enough for a street
+					for (int k = a; k <= b; k++) minorRun[k] = true;
+					continue;
+				}
+				if (cutOff && b - a + 1 < (arterial ? MIN_ARTERIAL_PIECE : MIN_ISLAND_PIECE)) {
 					for (int k = a; k <= b; k++) {
 						state[k] = State.NONE;
 						bridges[k] = null;
@@ -260,9 +314,31 @@ public final class RoadProfile {
 		clampSlope(hgt, pinned, 0.5);
 		for (int k = 0; k < n; k++) hgt[k] = Math.round(hgt[k] * 2) / 2.0;
 		flattenBlips(hgt, pinned, arterial ? 16 : 10);
+		if (!arterial) {
+			for (int k = 0; k + 1 < n; k++) {
+				if (Math.abs(hgt[k + 1] - hgt[k]) <= 0.5 || state[k] == State.NONE || state[k + 1] == State.NONE) continue;
+				int a = k, b = k + 1;
+				while (a > 0 && !pinned[a]) a--;
+				while (b < n - 1 && !pinned[b]) b++;
+				int from = a + 1, to = b - 1;
+				if (a < 8) from = 0;
+				if (b > n - 9) to = n - 1;
+				for (int j = Math.max(0, Math.min(from, k)); j <= Math.min(n - 1, Math.max(to, k + 1)); j++) {
+					state[j] = State.NONE;
+					bridges[j] = null;
+				}
+				k = Math.max(k, to);
+			}
+		}
 		boolean[] deck = longRuns(n, k -> state[k] == State.GROUND && hgt[k] - ground[k] >= ELEVATED_HEIGHT, ELEVATED_MIN);
 		for (int k = 0; k < n; k++) if (deck[k]) state[k] = State.ELEVATED;
-		return new RoadProfile(hgt, state, bridges, style, railing, biome);
+		java.util.BitSet minor = null;
+		for (int k = 0; k < n; k++) {
+			if (!minorRun[k] || state[k] == State.NONE) continue;
+			if (minor == null) minor = new java.util.BitSet(n);
+			minor.set(k);
+		}
+		return new RoadProfile(hgt, state, bridges, style, railing, biome, minor);
 	}
 
 	private static void flattenBlips(double[] h, boolean[] pinned, int maxLen) {
@@ -290,17 +366,34 @@ public final class RoadProfile {
 		}
 	}
 
-	private static Bridge designBridge(DoubleFunction<double[]> pointAt, int a, int b, double deck,
-			int[] floor, int sea, boolean arterial, boolean straight, Railing roadRailing) {
+	/** True if land is within 'reach' blocks beyond the road's start */
+	private static boolean landBeyond(TerrainSampler terrain, GradeField grade, DoubleFunction<double[]> pointAt, double s0, int dir, int reach) {
+		double[] p = pointAt.apply(s0), q = pointAt.apply(s0 - dir);
+		double tx = p[0] - q[0], tz = p[1] - q[1], tl = Math.hypot(tx, tz);
+		if (tl < 1e-6) return true;
+		tx /= tl;
+		tz /= tl;
+		for (int k = 4; k <= reach; k += 4) {
+			int x = (int) Math.round((p[0] + tx * k) / 4) * 4, z = (int) Math.round((p[1] + tz * k) / 4) * 4;
+			if (!terrain.sample(x, z).water() && !grade.smallIslandAt(x, z)) return true;
+		}
+		return false;
+	}
+
+		private static Bridge designBridge(DoubleFunction<double[]> pointAt, int a, int b, double deck,
+			int[] floor, int sea, boolean arterial, boolean straight, Railing roadRailing, boolean grand, boolean ramp) {
+		// Grand bridges
+		if (grand) return new Bridge(deck, Railing.BLOCKS, 4, true);
 		int span = b - a + 1;
 		int lowest = sea;
 		for (int k = a; k <= b; k++) lowest = Math.min(lowest, floor[k]);
 		int depth = sea - lowest;
 		boolean axis = straight || axisAligned(pointAt, a - 1, b + 1);
-		boolean half = deck != Math.floor(deck);
+		boolean half = deck != Math.floor(deck) || ramp;
 		Railing railing = half ? Railing.BLOCKS : axis ? roadRailing : Railing.CRENEL;
 		int pillar = 1 + (arterial ? 1 : 0) + (span > 40 || depth > 10 ? 1 : 0);
-		return new Bridge(deck, railing, Math.min(3, pillar));
+		if (span <= 12 && !arterial) pillar = 0;
+		return new Bridge(deck, railing, Math.min(3, pillar), false);
 	}
 
 	/** True if the center line between samples a and b runs along the X or Z axis */

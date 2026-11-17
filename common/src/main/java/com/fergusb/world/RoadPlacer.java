@@ -6,7 +6,11 @@ import com.fergusb.plan.RoadStyle;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.WorldGenLevel;
-import net.minecraft.world.level.block.*;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.CrossCollisionBlock;
+import net.minecraft.world.level.block.FenceBlock;
+import net.minecraft.world.level.block.WallBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.WallSide;
 
@@ -25,9 +29,6 @@ final class RoadPlacer {
 	private final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 	private final List<BlockPos> links = new ArrayList<>(); // walls and fences to connect
 
-	private static final int TUNNEL_HEIGHT = 5;
-	private static final BlockState TUNNEL_LIGHT = Blocks.SEA_LANTERN.defaultBlockState();
-
 	RoadPlacer(WorldGenLevel level, Surface surf) {
 		this.level = level;
 		this.surf = surf;
@@ -39,11 +40,14 @@ final class RoadPlacer {
 		int x = x0 + dx, z = z0 + dz;
 		CityPlanner.RoadPoint rp = surf.road(dx, dz);
 		RoadMaterials m = RoadMaterials.of(rp.style());
-		boolean edge = false, open = false;
+		boolean edge = false, open = false, wetSide = false;
 		for (int[] d : DIRS) {
 			int nx = dx + d[0], nz = dz + d[1];
 			if (!surf.builtRoad(nx, nz)) edge = true;
-			if (surf.openWater(nx, nz)) open = true;
+			if (surf.openWater(nx, nz)) {
+				wetSide = true;
+				if (!surf.builtRoad(nx, nz)) open = true;
+			}
 		}
 		BlockState full = edge ? m.sidewalk() : rp.centerLine() ? m.center() : m.road();
 		BlockState slab = edge ? m.sidewalkSlab() : rp.centerLine() ? m.centerSlab() : m.roadSlab();
@@ -51,8 +55,9 @@ final class RoadPlacer {
 		double h = rp.height();
 		int k = (int) Math.floor(h);
 		boolean half = h - k > 0.25;
-		int top = k - 1; // highest full block
+		int top = k - 1;
 		boolean deep = waterDepth(x, z) >= 3;
+		boolean lowGround = rp.state() == RoadProfile.State.BRIDGE && !wet && !deep && clearBelow(x, z, top - 1) >= 3;
 		CityPlacer.set(level, pos.set(x, top, z), full);
 		if (half) CityPlacer.set(level, pos.set(x, k, z), slab);
 
@@ -61,13 +66,17 @@ final class RoadPlacer {
 			elevated(dx, dz, rp, k, half, edge, m);
 			return;
 		}
-		if ((rp.state() == RoadProfile.State.BRIDGE && bridge != null && wet) || deep) {
-			int t = bridge != null ? bridge.pillar() : rp.arterial() ? 2 : 1, spacing = t == 1 ? 6 : t == 2 ? 8 : 10;
-			if (Math.floorMod(x, spacing) < t && Math.floorMod(z, spacing) < t) {
+		boolean islet = rp.state() == RoadProfile.State.BRIDGE && bridge != null && !wet && !deep
+				&& (lowGround || surf.planner().grade().smallIslandAt(x, z));
+		boolean onDeck = (rp.state() == RoadProfile.State.BRIDGE && bridge != null && (wet || islet)) || deep && rp.state() == RoadProfile.State.BRIDGE;
+		if (onDeck) {
+			int t = bridge != null ? bridge.pillar() : rp.arterial() ? 2 : 1, spacing = t <= 1 ? 6 : t == 2 ? 8 : t == 3 ? 10 : 16;
+			if (t > 0 && !islet && pillarAt(dx, dz, rp, t, spacing, t >= 4)) {
 				CityPlacer.fillDown(level, pos, x, top - 1, z, Bridges.PILLAR);
 			}
 		} else {
 			CityPlacer.fillDown(level, pos, x, top - 1, z, edge ? m.retain() : FOUNDATION);
+			if (wetSide) faceWater(x, z, top - 1, m.retain());
 		}
 
 		int clearFrom = half ? k + 1 : k;
@@ -75,7 +84,8 @@ final class RoadPlacer {
 			tunnel(dx, dz, k, half, m);
 			return;
 		}
-		if (edge && open) {
+		boolean rail = open || islet || onDeck && !besideBuilding(dx, dz);
+		if (edge && rail && !surf.facesDoor(dx, dz)) {
 			RoadProfile.Railing railing = bridge != null ? bridge.railing()
 					: rp.straight() ? rp.railing() : RoadProfile.Railing.CRENEL;
 			clearFrom = railing(x, z, k, half, railing, rp.biome(), m);
@@ -86,27 +96,77 @@ final class RoadPlacer {
 	private void elevated(int dx, int dz, CityPlanner.RoadPoint rp, int k, boolean half, boolean edge, RoadMaterials m) {
 		int x = x0 + dx, z = z0 + dz;
 		int top = k - 1;
-		int ground = surf.groundY(dx, dz); // first air above the ground under the deck
+		int ground = surf.groundY(dx, dz);
 		CityPlacer.placePaved(level, pos, Math.min(surf.height(dx, dz), top - 1), x, z);
 		for (int y = ground; y < top; y++) CityPlacer.set(level, pos.set(x, y, z), Blocks.AIR.defaultBlockState());
 		BlockState full = edge ? m.sidewalk() : m.road(), slab = edge ? m.sidewalkSlab() : m.roadSlab();
 		CityPlacer.set(level, pos.set(x, top, z), full);
 		if (half) CityPlacer.set(level, pos.set(x, k, z), slab);
 		int t = rp.arterial() ? 2 : 1, spacing = t == 1 ? 6 : 8;
-		if (Math.floorMod(x, spacing) < t && Math.floorMod(z, spacing) < t) {
+		if (pillarAt(dx, dz, rp, t, spacing, false)) {
 			CityPlacer.fillDown(level, pos, x, top - 1, z, Bridges.PILLAR);
 		}
 		int clearFrom = half ? k + 1 : k;
 		boolean drop = false;
 		for (int[] d : DIRS) {
 			int nx = dx + d[0], nz = dz + d[1];
-			if (!surf.builtRoad(nx, nz) && surf.height(nx, nz) <= rp.height() - 2) drop = true;
+			if (!surf.builtRoad(nx, nz) && !surf.building(nx, nz) && surf.height(nx, nz) <= rp.height() - 2) drop = true;
 		}
-		if (edge && drop) {
+		if (edge && drop && !surf.facesDoor(dx, dz)) {
 			RoadProfile.Railing railing = rp.straight() ? rp.railing() : RoadProfile.Railing.CRENEL;
 			clearFrom = railing(x, z, k, half, railing, rp.biome(), m);
 		}
 		CityPlacer.clearUp(level, pos, x, clearFrom, z);
+	}
+
+	private boolean pillarAt(int dx, int dz, CityPlanner.RoadPoint rp, int t, int spacing, boolean centered) {
+		int x = x0 + dx, z = z0 + dz;
+		double lateral, along, half;
+		CityPlanner planner = surf.planner();
+		CityPlanner.Cell cell = surf.cell(dx, dz);
+		if (rp.arterial()) {
+			int ox = planner.arterialOffsetX(x), oz = planner.arterialOffsetZ(z);
+			if (ox != Integer.MAX_VALUE && oz != Integer.MAX_VALUE) return false;
+			boolean alongZ = ox != Integer.MAX_VALUE;
+			lateral = alongZ ? ox : oz;
+			along = alongZ ? z : x;
+			half = rp.profile().isMinor(rp.s()) ? com.fergusb.plan.RoadProfile.MINOR_HALF_WIDTH : CityPlanner.ARTERIAL_HALF_WIDTH;
+		} else {
+			com.fergusb.plan.Road road = cell.road();
+			if (road == null) return Math.floorMod(x, spacing) < t && Math.floorMod(z, spacing) < t;
+			double[] n = road.nearest(x, z);
+			lateral = (x - n[0]) * -n[3] + (z - n[1]) * n[2];
+			along = road.arcAt(x, z);
+			half = road.halfWidth;
+		}
+		if (Math.floorMod((int) Math.floor(along), spacing) >= t) return false;
+		double a = Math.abs(lateral);
+		return centered ? a <= t / 2.0 - 0.5 : a >= half - t + 0.5 && a <= half + 0.5;
+	}
+
+	private int clearBelow(int x, int z, int y) {
+		int n = 0;
+		for (; n < 8; n++) {
+			BlockState b = level.getBlockState(pos.set(x, y - n, z));
+			if (!b.isAir() && b.getFluidState().isEmpty()) break;
+		}
+		return n;
+	}
+
+	private boolean besideBuilding(int dx, int dz) {
+		for (int[] d : DIRS) if (surf.building(dx + d[0], dz + d[1])) return true;
+		return false;
+	}
+
+	private void faceWater(int x, int z, int top, BlockState block) {
+		for (int y = level.getSeaLevel() - 6; y <= top; y++) {
+			BlockState b = level.getBlockState(pos.set(x, y, z));
+			if (b.isAir() || !b.getFluidState().isEmpty() || b.is(block.getBlock())) continue;
+			if (b.is(net.minecraft.tags.BlockTags.BASE_STONE_OVERWORLD) || b.is(net.minecraft.tags.BlockTags.DIRT)
+					|| b.is(net.minecraft.tags.BlockTags.SAND) || b.is(Blocks.GRAVEL) || b.is(Blocks.CLAY) || b.is(Blocks.SANDSTONE)) {
+				CityPlacer.set(level, pos.set(x, y, z), block);
+			}
+		}
 	}
 
 	private int waterDepth(int x, int z) {
@@ -118,6 +178,9 @@ final class RoadPlacer {
 		}
 		return n;
 	}
+
+	private static final int TUNNEL_HEIGHT = 5;
+	private static final BlockState TUNNEL_LIGHT = Blocks.SEA_LANTERN.defaultBlockState();
 
 	private void tunnel(int dx, int dz, int k, boolean half, RoadMaterials m) {
 		int x = x0 + dx, z = z0 + dz;

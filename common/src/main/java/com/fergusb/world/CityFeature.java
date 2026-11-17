@@ -10,6 +10,7 @@ import net.minecraft.world.level.chunk.ChunkGenerator;
 import net.minecraft.world.level.levelgen.feature.Feature;
 
 public record CityFeature() implements Feature {
+	public static volatile boolean enabled = true;
 	public static final MapCodec<CityFeature> CODEC = MapCodec.unit(CityFeature::new);
 
 	@Override
@@ -21,7 +22,11 @@ public record CityFeature() implements Feature {
 	public boolean place(WorldGenLevel level, ChunkGenerator generator, RandomSource random, BlockPos origin) {
 		ServerLevel server = level.getLevel();
 		if (server.dimension() != Level.OVERWORLD) return false;
+		com.fergusb.plan.Stats.chunk();
+		if (!enabled) return false;
+		long t0 = System.nanoTime();
 		CityPlacer.placeChunk(level, generator, random, Planners.get(server), origin.getX() >> 4, origin.getZ() >> 4);
+		com.fergusb.plan.Stats.placed(System.nanoTime() - t0);
 		return true;
 	}
 }

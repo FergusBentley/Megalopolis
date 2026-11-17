@@ -6,8 +6,8 @@ import java.util.List;
 final class CoastRoads {
 	private static final int G = 8; // shoreline grid
 	private static final double HALF_WIDTH = (CityPlanner.STREET_WIDTH - 1) / 2.0;
-	private static final int MIN_CELLS = 5; // shorter shorelines don't get a road
-	private static final double CLEAR = 14; // shoreline this close to a street is already served
+	private static final int MIN_CELLS = 3; // shorter shorelines don't get a road
+	private static final double CLEAR = 10; // shoreline this close to a street is already served
 	private static final double LINK = 56; // how far an end looks for a road to join
 
 	private CoastRoads() {}
@@ -36,7 +36,15 @@ final class CoastRoads {
 				if (!wet) continue;
 				int x = x0 + i * G, z = z0 + j * G;
 				boolean served = false;
-				for (Road r : streets) if (r.containsWithin(x, z, CLEAR)) served = true;
+				for (Road r : streets) {
+					if (!r.containsWithin(x, z, CLEAR)) continue;
+					if (r.profile == null) {
+						served = true;
+						continue;
+					}
+					double[] n = r.nearest(x, z);
+					if (r.profile.state(r.arcAt(n[0], n[1])) != RoadProfile.State.NONE) served = true;
+				}
 				if (served) continue;
 				shore[i][j] = true;
 				count++;
@@ -90,14 +98,15 @@ final class CoastRoads {
 			pts = RoadRouter.chaikin(RoadRouter.chaikin(pts));
 			List<Road> joinable = new ArrayList<>(streets);
 			joinable.addAll(out);
-			pts = link(pts, true, joinable, bounds, router);
-			pts = link(pts, false, joinable, bounds, router);
+			pts = link(planner, pts, true, joinable, bounds, router);
+			pts = link(planner, pts, false, joinable, bounds, router);
 			double[] xs = new double[pts.size()], zs = new double[pts.size()];
 			for (int k = 0; k < pts.size(); k++) {
 				xs[k] = pts.get(k)[0];
 				zs[k] = pts.get(k)[1];
 			}
 			Road road = new Road(xs, zs, HALF_WIDTH, Road.Kind.STREET);
+			road.coastal = true;
 			if (road.length() >= 24) out.add(road);
 		}
 		return out;
@@ -114,7 +123,7 @@ final class CoastRoads {
 		return d;
 	}
 
-	private static List<double[]> link(List<double[]> pts, boolean atStart, List<Road> roads, Rect bounds, RoadRouter router) {
+	private static List<double[]> link(CityPlanner planner, List<double[]> pts, boolean atStart, List<Road> roads, Rect bounds, RoadRouter router) {
 		double[] e = atStart ? pts.get(0) : pts.get(pts.size() - 1);
 		double best = LINK;
 		double[] target = null;
@@ -135,7 +144,8 @@ final class CoastRoads {
 			}
 		}
 		if (target == null) return pts; // nothing near
-		double[][] r = router.route(e[0], e[1], target[0], target[1]);
+		double[][] r = straightClear(planner, roads, e, target) ? new double[][] {{e[0], target[0]}, {e[1], target[1]}}
+				: router.route(e[0], e[1], target[0], target[1]);
 		List<double[]> link = new ArrayList<>();
 		for (int k = 0; k < r[0].length; k++) link.add(new double[] {r[0][k], r[1][k]});
 		List<double[]> out = new ArrayList<>();
@@ -147,6 +157,26 @@ final class CoastRoads {
 			for (int k = 1; k < link.size(); k++) out.add(link.get(k));
 		}
 		return out;
+	}
+
+	private static boolean straightClear(CityPlanner planner, List<Road> roads, double[] e, double[] t) {
+		double len = Math.hypot(t[0] - e[0], t[1] - e[1]);
+		if (len < 2) return true;
+		GradeField grade = planner.grade();
+		double h0 = grade.grade(e[0], e[1]), h1 = grade.grade(t[0], t[1]);
+		double wet = 0;
+		for (double s = 4; s <= len - 6; s += 2) {
+			double f = s / len, x = e[0] + (t[0] - e[0]) * f, z = e[1] + (t[1] - e[1]) * f;
+			for (Road r : roads) if (r.containsWithin(x, z, r.halfWidth + HALF_WIDTH + 1)) return false;
+			if (planner.terrain().sample((int) Math.round(x), (int) Math.round(z)).water()) {
+				wet += 2;
+				if (wet > RoadProfile.MAX_SPAN - 4) return false;
+				continue;
+			}
+			wet = 0;
+			if (Math.abs(grade.grade(x, z) - (h0 + (h1 - h0) * f)) > 6) return false;
+		}
+		return Math.abs(h1 - h0) <= len * RoadProfile.STREET_SLOPE;
 	}
 
 	/** Height profiles for new roads */

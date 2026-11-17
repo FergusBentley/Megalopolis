@@ -29,6 +29,6 @@ public final class SpatialIndex {
 	}
 
 	private static long key(int cx, int cz) {
-		return ((long) cx << 32) ^ (cz & 0xFFFFFFFFL);
+		return Hashing.pack(cx, cz);
 	}
 }

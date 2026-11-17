@@ -31,6 +31,12 @@ public final class FabricPlatform implements Platform {
 	}
 
 	@Override
+	public void addBiomeFeature(ResourceKey<net.minecraft.world.level.biome.Biome> biome, GenerationStep.Decoration step,
+			ResourceKey<PlacedFeature> feature) {
+		BiomeModifications.addFeature(BiomeSelectors.includeByKey(biome), step, feature);
+	}
+
+	@Override
 	public void removeOverworldFeatures(Predicate<Identifier> shouldRemove) {
 		BiomeModifications.create(Megalopolis.id("remove_vanilla_surface"))
 				.add(ModificationPhase.REMOVALS, BiomeSelectors.foundInOverworld(), context -> {

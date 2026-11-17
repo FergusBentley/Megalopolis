@@ -5,6 +5,7 @@ public final class Obb {
 
 	public final double cx, cz, ux, uz, halfU, halfV;
 	public final int minX, minZ, maxX, maxZ; // inclusive bounding box
+	volatile Object shapeCache;
 
 	public Obb(double cx, double cz, double ux, double uz, double halfU, double halfV) {
 		double len = Math.sqrt(ux * ux + uz * uz);

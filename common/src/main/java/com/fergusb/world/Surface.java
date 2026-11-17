@@ -65,18 +65,27 @@ final class Surface {
 				CityPlanner.RoadPoint near = null;
 				int best = Integer.MAX_VALUE;
 				boolean nearBuilding = false;
+				int bBest = Integer.MAX_VALUE, bBase = Integer.MIN_VALUE; // nearest building within reach
 				for (int ox = -BANK; ox <= BANK; ox++) {
 					for (int oz = -BANK; oz <= BANK; oz++) {
 						int d = ox * ox + oz * oz, i = dx + ox + B, j = dz + oz + B;
 						CityPlanner.RoadPoint rp = road[i][j];
-						if (rp != null && follows(rp) && d <= BANK * BANK + 1 && d < best) {
+						if (rp != null && rp.state() == RoadProfile.State.GROUND && d <= BANK * BANK + 1 && d < best) {
 							best = d;
 							near = rp;
 						}
 						if (d <= BUILDING_REACH * BUILDING_REACH + 1 && building[i][j]) nearBuilding = true;
+						if (building[i][j] && d <= BANK * BANK + 1 && d < bBest) {
+							bBest = d;
+							bBase = cells[i][j].lot().baseY();
+						}
 					}
 				}
 				boolean wet = wide[dx + B][dz + B];
+				CityPlanner.Cell here = cells[dx + B][dz + B];
+				if (nearBuilding && here.kind() == CityPlanner.Kind.LOT && here.lot().footprint() != null) grade = here.lot().baseY();
+				else if (bBase != Integer.MIN_VALUE && here.kind() == CityPlanner.Kind.LOT && !openGround(here)
+						&& here.lot().use() != com.fergusb.plan.Lot.Use.PARK) grade = bBase;
 				double h = grade;
 				if (near != null) {
 					// Level beside the road, then a bank of at most one block per block
@@ -89,16 +98,56 @@ final class Surface {
 				filled[dx + 1][dz + 1] = fill;
 				// Open ground away from the streets and buildings is left alone
 				boolean nearCity = nearBuilding || (near != null && best <= CITY_REACH * CITY_REACH + 1);
-				natural[dx + 1][dz + 1] = !nearCity && openGround(cells[dx + B][dz + B]);
+				CityPlanner.Cell cell = cells[dx + B][dz + B];
+				boolean park = cell.kind() == CityPlanner.Kind.LOT && cell.lot().use() == com.fergusb.plan.Lot.Use.PARK;
+				boolean steep = park && near != null && Math.abs(grade - h) > 2;
+				int doorFloor = doorFront(dx, dz);
+				if (doorFloor != Integer.MIN_VALUE && h > doorFloor) {
+					h = doorFloor;
+					nearCity = true;
+				}
+				natural[dx + 1][dz + 1] = !nearCity && (openGround(cell) || steep);
 				height[dx + 1][dz + 1] = Math.round(h * 2) / 2.0;
 				style[dx + 1][dz + 1] = near != null ? near.style() : null;
 			}
 		}
 	}
 
+	private static final int[][] DIRS4 = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+
+	private int doorFront(int dx, int dz) {
+		return doorAhead(dx, dz, 1);
+	}
+
+	static final int DOOR_CLEAR = 8;
+
+	boolean facesDoor(int dx, int dz) {
+		return doorAhead(dx, dz, DOOR_CLEAR) != Integer.MIN_VALUE;
+	}
+
+	private int doorAhead(int dx, int dz, int reach) {
+		for (int[] d : DIRS4) {
+			for (int k = 1; k <= reach; k++) {
+				int i = dx - d[0] * k + B, j = dz - d[1] * k + B;
+				if (i < 0 || j < 0 || i >= building.length || j >= building.length) break;
+				if (road[i][j] != null) break;
+				if (!building[i][j]) continue;
+				BuildingPlacer.DoorCell dc = BuildingPlacer.doorPlan(planner, cells[i][j].lot())
+						.get(com.fergusb.plan.Hashing.pack(x0 + i - B, z0 + j - B));
+				if (dc != null && dc.outward().getStepX() == d[0] && dc.outward().getStepZ() == d[1]) return dc.floorWalk();
+				break;
+			}
+		}
+		return Integer.MIN_VALUE;
+	}
+
 	/** Roads the ground follows */
 	private static boolean follows(CityPlanner.RoadPoint rp) {
 		return rp.state() == RoadProfile.State.GROUND || rp.state() == RoadProfile.State.BRIDGE;
+	}
+
+	CityPlanner planner() {
+		return planner;
 	}
 
 	CityPlanner.Cell cell(int dx, int dz) {
@@ -170,7 +219,9 @@ final class Surface {
 	}
 
 	boolean openWater(int dx, int dz) {
-		return wide[dx + B][dz + B] && !filled[dx + 1][dz + 1] && !builtRoad(dx, dz);
+		if (!wide[dx + B][dz + B] || filled[dx + 1][dz + 1]) return false;
+		CityPlanner.RoadPoint rp = road[dx + B][dz + B];
+		return rp == null || rp.state() == RoadProfile.State.BRIDGE;
 	}
 
 	boolean shore(int dx, int dz) {
@@ -178,6 +229,6 @@ final class Surface {
 	}
 
 	double heightAt(int x, int z) {
-		return height(x - x0, z - z0);
+		return height(Math.max(-1, Math.min(16, x - x0)), Math.max(-1, Math.min(16, z - z0)));
 	}
 }

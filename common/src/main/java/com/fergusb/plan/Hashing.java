@@ -17,7 +17,27 @@ public final class Hashing {
 		return h;
 	}
 
-	// Maps a hash to [0, 1)
+	public static long pack(int x, int z) {
+		return mix(((long) x << 32) | (z & 0xFFFFFFFFL));
+	}
+
+	public static int unpackX(long key) {
+		return (int) (unmix(key) >> 32);
+	}
+	public static int unpackZ(long key) {
+		return (int) unmix(key);
+	}
+
+	/** Inverse mix */
+	static long unmix(long z) {
+		z = z ^ (z >>> 31) ^ (z >>> 62);
+		z *= 0x319642B2D24D8EC3L;
+		z = z ^ (z >>> 27) ^ (z >>> 54);
+		z *= 0x96DE1B173F119089L;
+		return z ^ (z >>> 30) ^ (z >>> 60);
+	}
+
+	/** Maps a hash to [0, 1) */
 	public static double unit(long h) {
 		return (h >>> 11) * 0x1.0p-53;
 	}
