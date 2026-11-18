@@ -52,6 +52,19 @@ public final class FabricPlatform implements Platform {
 	}
 
 	@Override
+	public void replaceLandCarvers(List<ResourceKey<net.minecraft.world.level.levelgen.carver.WorldCarver>> carvers) {
+		var land = BiomeSelectors.foundInOverworld().and(BiomeSelectors.tag(net.minecraft.tags.BiomeTags.IS_OCEAN).negate());
+		BiomeModifications.create(Megalopolis.id("replace_land_carvers"))
+				.add(ModificationPhase.REPLACEMENTS, land, context -> {
+					var settings = context.getGenerationSettings();
+					for (var carver : List.copyOf(settings.getCarvers())) {
+						carver.unwrapKey().ifPresent(settings::removeCarver);
+					}
+					for (var carver : carvers) settings.addCarver(carver);
+				});
+	}
+
+	@Override
 	public void registerCommands(Consumer<CommandDispatcher<CommandSourceStack>> registrar) {
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> registrar.accept(dispatcher));
 	}

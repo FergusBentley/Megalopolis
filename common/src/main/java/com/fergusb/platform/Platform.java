@@ -17,5 +17,7 @@ public interface Platform {
 	void addBiomeFeature(ResourceKey<net.minecraft.world.level.biome.Biome> biome, GenerationStep.Decoration step, ResourceKey<PlacedFeature> feature);
 
 	void removeOverworldFeatures(Predicate<Identifier> shouldRemove);
+	void replaceLandCarvers(java.util.List<ResourceKey<net.minecraft.world.level.levelgen.carver.WorldCarver>> carvers);
+
 	void registerCommands(Consumer<CommandDispatcher<CommandSourceStack>> registrar);
 }
