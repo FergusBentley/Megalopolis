@@ -120,7 +120,7 @@ final class BuildingPlacer {
 					boolean straight = !face.corner() && straightWall(lot, x, z, f, face.alongX());
 					int floorWalk = y - ly + 1;
 					DoorCell door = doors.get(Hashing.pack(x, z));
-					boolean doorHere = door != null && door.floorWalk() == floorWalk && (ly == 1 || ly == 2);
+					boolean doorHere = door != null && door.door() && (y == door.floorWalk() || y == door.floorWalk() + 1);
 					boolean front = true;
 					if (!partition && shopfront(s, face, out, y, ly)) {
 						int[] back = indexStep(fp, face, x, z, lu, lv);
@@ -130,24 +130,31 @@ final class BuildingPlacer {
 							int nx = x + back[0] * k, nz = z + back[1] * k;
 							DoorCell nd = doors.get(Hashing.pack(nx, nz));
 							BlockState nb = besideWall(planner, surf, lot, fp, s, pal, trim, nx, nz, f, y, ly, unit, w, besideOut);
-							if (nd != null && nd.floorWalk() == floorWalk || nb != null && nb.getBlock() == pal.storefront().getBlock()) front = true;
+							if (nd != null && nd.door() && nd.floorWalk() == floorWalk || nb != null && nb.getBlock() == pal.storefront().getBlock()) front = true;
 						}
 					}
 					if (doorHere) {
-						state = doorBlock(s, ly, door);
+						state = doorBlock(s, y == door.floorWalk() ? 1 : 2, door);
 					} else if (partition && !face.corner()) {
 						state = trim;
 					} else {
 						state = wallBlock(s, face, f, ly, out, y, pal, trim, r, decay, weathering, front);
 					}
-					if (state.isAir() && doorNear(doors, x, z, floorWalk)) state = pal.glass();
-					if (Palettes.thin(state) && (!straight || doorNear(doors, x, z, floorWalk))) {
+					if (state.isAir() && doorNear(doors, x, z, y)) state = pal.glass();
+					if (Palettes.thin(state) && (!straight || doorNear(doors, x, z, y))) {
 						state = state.getBlock() == pal.glass().getBlock() ? pal.storefront() : trim;
 					}
+					if (!doorHere && !state.canOcclude() && walledIn(planner, lot, x, z, f, y)) state = weathered(pal.wall(), pal.weatheredWall(), r, weathering);
+					if (!doorHere && doorNear(doors, x, z, y)) {
+						state = trim.canOcclude() ? trim : pal.wall();
+					}
+					if (door != null && door.carve() && (y == door.floorWalk() || y == door.floorWalk() + 1)) state = AIR;
 					if (!straight) state = Palettes.bark(state);
 					state = orient(state, face.alongX(), ly == 0 && !face.corner());
 				} else if (partition) {
 					state = weathered(pal.wall(), pal.weatheredWall(), r, weathering);
+				} else if (plugAt(doors, x, z, y)) {
+					state = trim.canOcclude() ? trim : pal.wall();
 				} else if (ly == 0) {
 					boolean light = f > 0 && lightU == 3 && lightV == 3 && r >= 0.7 * decay;
 					state = light ? LIGHT : FLOOR;
@@ -309,7 +316,22 @@ final class BuildingPlacer {
 
 	// doors
 
-	record DoorCell(int floorWalk, Direction outward, int px, int pz) {}
+	record DoorCell(int floorWalk, Direction outward, int px, int pz) {
+		boolean door() {
+			return outward != null;
+		}
+
+		boolean carve() {
+			return outward == null && px == 1;
+		}
+
+		boolean plug() {
+			return outward == null && px == 0;
+		}
+	}
+
+	private static final int DOOR_SPACING = 5;
+	private static final int PARK_GROUP = 99999;
 
 	private static final java.util.Map<Lot, java.util.Map<Long, DoorCell>> DOOR_PLANS =
 			java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
@@ -334,14 +356,18 @@ final class BuildingPlacer {
 		int reach = lot.bounds().widthU() - fp.widthU() + 3;
 		record Cand(int x, int z, int fw, int dir, int index, double score, boolean straight) {}
 		java.util.Map<Integer, java.util.List<Cand>> groups = new java.util.TreeMap<>();
+		java.util.Map<Object, Integer> streetIds = new java.util.IdentityHashMap<>();
+		for (double tol = 0.5; tol <= 1.0 && groups.isEmpty(); tol += 0.5)
 		for (int x = fp.minX - 1; x <= fp.maxX + 1; x++) {
 			for (int z = fp.minZ - 1; z <= fp.maxZ + 1; z++) {
-				if (!BuildingShape.insideAt(lot, x, z, 0)) continue;
+				if (!BuildingShape.insideAt(lot, x, z, 0) || planner.classify(x, z).lot() != lot) continue;
 				int open = openSide(lot, x, z, 0);
 				if (open < 0) continue;
 				int[] dir = DIRS[open];
-				double h = streetHeight(planner, lot, x, z, dir, reach);
-				if (Double.isNaN(h)) continue;
+				CityPlanner.RoadPoint rp = streetAt(planner, lot, x, z, dir, reach);
+				if (rp == null) continue;
+				double h = rp.height();
+				int street = streetIds.computeIfAbsent(rp.profile(), q -> streetIds.size());
 				boolean adjacent = planner.classify(x + dir[0], z + dir[1]).isRoad();
 				int[] c = BuildingShape.local(fp, x, z);
 				int lu = c[0], lv = c[1];
@@ -353,9 +379,9 @@ final class BuildingPlacer {
 					base = unitBase(planner, lot, s, unit, w);
 					floors += extraFloors(s, unit);
 				}
-				int k = (int) Math.round((h - base - 1) / FH);
+				int k = (int) (tol > 0.5 ? Math.ceil((h - base - 1) / FH) : Math.round((h - base - 1) / FH));
 				int fw = base + k * FH + 1;
-				if (k < 0 || k >= floors || Math.abs(h - fw) > 0.5 || adjacent && h > fw) continue;
+				if (k < 0 || k >= floors || Math.abs(h - fw) > tol || adjacent && h > fw) continue;
 				if (k > 0 && (!BuildingShape.insideAt(lot, x, z, k) || openSide(lot, x, z, k) != open)) continue;
 				Face face = face(lot, fp, x, z, lu, lv, k);
 				if (face == null || face.corner()) continue;
@@ -371,23 +397,136 @@ final class BuildingPlacer {
 				}
 				if (!straightWall(lot, x, z, k, face.alongX())) continue;
 				boolean straight = true;
-				groups.computeIfAbsent(open * 1000 + unit, g -> new java.util.ArrayList<>())
+				groups.computeIfAbsent(street * 1000 + unit, g -> new java.util.ArrayList<>())
 						.add(new Cand(x, z, fw, open, i, Math.abs(i - target), straight));
 			}
 		}
-		for (java.util.List<Cand> group : groups.values()) {
+		java.util.Map<Cand, long[]> plugs = new java.util.HashMap<>();
+		if (groups.isEmpty()) {
+			for (int x = fp.minX - 1; x <= fp.maxX + 1; x++) {
+				for (int z = fp.minZ - 1; z <= fp.maxZ + 1; z++) {
+					if (!BuildingShape.insideAt(lot, x, z, 0) || planner.classify(x, z).lot() != lot) continue;
+					int[] open = openSides(lot, x, z, 0);
+					if (open == null) continue;
+					for (int o = 0; o < 2; o++) {
+						int[] dir = DIRS[open[o]], other = DIRS[open[1 - o]];
+						int ix = x - other[0], iz = z - other[1];
+						int cx = x - dir[0], cz = z - dir[1];
+						if (!BuildingShape.insideAt(lot, ix, iz, 0) || !BuildingShape.insideAt(lot, cx, cz, 0)
+								|| planner.classify(ix, iz).lot() != lot || planner.classify(cx, cz).lot() != lot) continue;
+						boolean enclosed = true;
+						for (int[] dd : DIRS) enclosed &= BuildingShape.insideAt(lot, cx + dd[0], cz + dd[1], 0);
+						if (!enclosed) continue;
+						CityPlanner.RoadPoint rp = streetAt(planner, lot, x, z, dir, reach);
+						if (rp == null) continue;
+						double h = rp.height();
+						int[] c = BuildingShape.local(fp, x, z);
+						int unit = townhouses ? BuildingShape.unit(lot, c[0]) : 0;
+						int base = townhouses ? unitBase(planner, lot, s, unit, w) : lot.baseY();
+						int floors = lot.floors() + (townhouses ? extraFloors(s, unit) : 0);
+						int k = (int) Math.ceil((h - base - 1) / FH);
+						int fw = base + k * FH + 1;
+						boolean adjacent = planner.classify(x + dir[0], z + dir[1]).isRoad();
+						if (k < 0 || k >= floors || fw - h > 1.0 || adjacent && h > fw) continue;
+						if (k > 0 && !BuildingShape.insideAt(lot, x, z, k)) continue;
+						int street = streetIds.computeIfAbsent(rp.profile(), q -> streetIds.size());
+						Cand cd = new Cand(x, z, fw, open[o], 0, Math.abs(c[0] - w / 2.0) + Math.abs(c[1] - fp.depthV() / 2.0), false);
+						groups.computeIfAbsent(street * 1000 + unit, g -> new java.util.ArrayList<>()).add(cd);
+						plugs.put(cd, new long[] {ix, iz});
+					}
+				}
+			}
+		}
+		if (groups.isEmpty()) {
+			for (int x = fp.minX - 1; x <= fp.maxX + 1; x++) {
+				for (int z = fp.minZ - 1; z <= fp.maxZ + 1; z++) {
+					if (!BuildingShape.insideAt(lot, x, z, 0) || planner.classify(x, z).lot() != lot) continue;
+					int open = openSide(lot, x, z, 0);
+					if (open < 0) continue;
+					int[] dir = DIRS[open];
+					CityPlanner.RoadPoint rp = streetAt(planner, lot, x, z, dir, reach);
+					if (rp == null) continue;
+					boolean adjacent = planner.classify(x + dir[0], z + dir[1]).isRoad();
+					int[] c = BuildingShape.local(fp, x, z);
+					int unit = townhouses ? BuildingShape.unit(lot, c[0]) : 0;
+					int base = townhouses ? unitBase(planner, lot, s, unit, w) : lot.baseY();
+					int floors = lot.floors() + (townhouses ? extraFloors(s, unit) : 0);
+					int walk = (int) Math.ceil(rp.height());
+					int row = Math.floorMod(walk - base, FH);
+					if (row == 0) walk += 1;
+					else if (row == 3) walk += adjacent ? 2 : -1;
+					int f = Math.floorDiv(walk - base, FH);
+					if (f < 0 || f >= floors || walk - rp.height() > 2) continue;
+					if (!BuildingShape.insideAt(lot, x, z, f) || openSide(lot, x, z, f) != open) continue;
+					Face face = face(lot, fp, x, z, c[0], c[1], f);
+					if (face == null || face.corner() || face.index() < 1 || face.index() > face.length() - 2) continue;
+					if (!straightWall(lot, x, z, f, face.alongX())) continue;
+					int street = streetIds.computeIfAbsent(rp.profile(), q -> streetIds.size());
+					groups.computeIfAbsent(street * 1000 + unit, g -> new java.util.ArrayList<>())
+							.add(new Cand(x, z, walk, open, face.index(), Math.abs(face.index() - face.length() / 2.0), false));
+				}
+			}
+		}
+		for (int x = fp.minX - 1; x <= fp.maxX + 1; x++) {
+			for (int z = fp.minZ - 1; z <= fp.maxZ + 1; z++) {
+				if (!BuildingShape.insideAt(lot, x, z, 0)) continue;
+				int open = openSide(lot, x, z, 0);
+				if (open < 0) continue;
+				int[] dir = DIRS[open];
+				boolean park = false;
+				double parkGround = Double.NaN;
+				for (int k = 1; k <= 3 && !park; k++) {
+					int px = x + dir[0] * k, pz = z + dir[1] * k;
+					CityPlanner.Cell c = planner.classify(px, pz);
+					if (c.kind() == CityPlanner.Kind.LOT && c.lot().use() == Lot.Use.PARK) {
+						park = true;
+						parkGround = ParkPaths.ground(planner, c.lot(), px, pz);
+					} else if (c.kind() != CityPlanner.Kind.GAP && !(c.kind() == CityPlanner.Kind.LOT && c.lot() == lot)) break;
+				}
+				if (!park) continue;
+				int[] c = BuildingShape.local(fp, x, z);
+				int unit = townhouses ? BuildingShape.unit(lot, c[0]) : 0;
+				int base = townhouses ? unitBase(planner, lot, s, unit, w) : lot.baseY();
+				if (Double.isNaN(parkGround) || base + 1 - parkGround > 1 || parkGround - (base + 1) > 1) continue;
+				Face face = face(lot, fp, x, z, c[0], c[1], 0);
+				if (face == null || face.corner() || face.index() < 1 || face.index() > face.length() - 2) continue;
+				if (!straightWall(lot, x, z, 0, face.alongX())) continue;
+				groups.computeIfAbsent(PARK_GROUP * 1000 + unit, g -> new java.util.ArrayList<>())
+						.add(new Cand(x, z, base + 1, open, face.index(), Math.abs(face.index() - face.length() / 2.0), false));
+			}
+		}
+		java.util.Map<Long, Integer> doorUnit = new java.util.HashMap<>();
+		for (var groupEntry : groups.entrySet()) {
+			java.util.List<Cand> group = groupEntry.getValue();
+			int groupUnit = groupEntry.getKey() % 1000;
 			Cand best = null;
 			for (Cand cd : group) {
 				if (best == null || cd.score() < best.score()
 						|| cd.score() == best.score() && (cd.x() < best.x() || cd.x() == best.x() && cd.z() < best.z())) best = cd;
 			}
+			boolean crowded = false;
+			for (int ox = -DOOR_SPACING; ox <= DOOR_SPACING && !crowded; ox++) {
+				for (int oz = -DOOR_SPACING; oz <= DOOR_SPACING && !crowded; oz++) {
+					Integer u = doorUnit.get(Hashing.pack(best.x() + ox, best.z() + oz));
+					if (u != null && u == groupUnit) crowded = true;
+				}
+			}
+			if (crowded) continue;
 			Direction outward = Direction.getApproximateNearest(DIRS[best.dir()][0], 0, DIRS[best.dir()][1]);
 			Cand partner = null;
 			if (pairs && best.straight()) {
 				for (Cand cd : group) {
-					if (cd.fw() != best.fw() || !cd.straight() || Math.abs(cd.x() - best.x()) + Math.abs(cd.z() - best.z()) != 1) continue;
+					if (cd.fw() != best.fw() || cd.dir() != best.dir() || !cd.straight() || Math.abs(cd.x() - best.x()) + Math.abs(cd.z() - best.z()) != 1) continue;
 					if (partner == null || cd.index() < partner.index()) partner = cd;
 				}
+			}
+			doorUnit.put(Hashing.pack(best.x(), best.z()), groupUnit);
+			if (partner != null) doorUnit.put(Hashing.pack(partner.x(), partner.z()), groupUnit);
+			long[] plug = plugs.get(best);
+			if (plug != null) {
+				plan.putIfAbsent(Hashing.pack((int) plug[0], (int) plug[1]), new DoorCell(best.fw(), null, 0, 0));
+				int[] in = DIRS[best.dir()];
+				plan.putIfAbsent(Hashing.pack(best.x() - in[0], best.z() - in[1]), new DoorCell(best.fw(), null, 1, 0));
 			}
 			if (partner == null) {
 				plan.put(Hashing.pack(best.x(), best.z()), new DoorCell(best.fw(), outward, 0, 0));
@@ -400,6 +539,18 @@ final class BuildingPlacer {
 		return plan;
 	}
 
+	private static int[] openSides(Lot lot, int x, int z, int f) {
+		int[] open = new int[2];
+		int n = 0;
+		for (int d = 0; d < DIRS.length; d++) {
+			if (BuildingShape.insideAt(lot, x + DIRS[d][0], z + DIRS[d][1], f)) continue;
+			if (n == 2) return null;
+			open[n++] = d;
+		}
+		if (n != 2 || DIRS[open[0]][0] == -DIRS[open[1]][0] && DIRS[open[0]][1] == -DIRS[open[1]][1]) return null;
+		return open;
+	}
+
 	private static int openSide(Lot lot, int x, int z, int f) {
 		int open = -1;
 		for (int d = 0; d < DIRS.length; d++) {
@@ -410,28 +561,44 @@ final class BuildingPlacer {
 		return open;
 	}
 
-	private static double streetHeight(CityPlanner planner, Lot lot, int x, int z, int[] dir, int reach) {
+	private static CityPlanner.RoadPoint streetAt(CityPlanner planner, Lot lot, int x, int z, int[] dir, int reach) {
 		for (int k = 1; k <= Math.max(2, reach); k++) {
 			int nx = x + dir[0] * k, nz = z + dir[1] * k;
 			CityPlanner.Cell c = planner.classify(nx, nz);
 			if (c.isRoad()) {
 				CityPlanner.RoadPoint rp = planner.roadPoint(c, nx, nz);
 				return rp.state() == com.fergusb.plan.RoadProfile.State.GROUND || rp.state() == com.fergusb.plan.RoadProfile.State.ELEVATED
-						? rp.height() : Double.NaN;
+						? rp : null;
 			}
 			if (c.kind() == CityPlanner.Kind.LOT && c.lot().use() == Lot.Use.BUILDING && c.lot().footprint() != null
-					&& BuildingShape.insideAt(c.lot(), nx, nz, 0)) return Double.NaN;
+					&& BuildingShape.insideAt(c.lot(), nx, nz, 0)) return null;
 		}
-		return Double.NaN;
+		return null;
 	}
 
-	private static boolean doorNear(java.util.Map<Long, DoorCell> doors, int x, int z, int floorWalk) {
+	private static boolean walledIn(CityPlanner planner, Lot lot, int x, int z, int f, int y) {
+		for (int[] d : DIRS) {
+			int nx = x + d[0], nz = z + d[1];
+			if (BuildingShape.insideAt(lot, nx, nz, f)) continue;
+			if (f > 0 && y == lot.baseY() + f * FH && BuildingShape.insideAt(lot, nx, nz, f - 1)) return true;
+			Lot o = planner.classify(nx, nz).lot();
+			if (o == null || o == lot || o.use() != Lot.Use.BUILDING || o.footprint() == null) continue;
+			int of = Math.floorDiv(y - o.baseY(), FH);
+			if (of >= 0 && of < o.floors() && BuildingShape.insideAt(o, nx, nz, of)) return true;
+		}
+		return false;
+	}
+
+	private static boolean plugAt(java.util.Map<Long, DoorCell> doors, int x, int z, int y) {
+		DoorCell d = doors.isEmpty() ? null : doors.get(Hashing.pack(x, z));
+		return d != null && d.plug() && (y == d.floorWalk() || y == d.floorWalk() + 1);
+	}
+
+	private static boolean doorNear(java.util.Map<Long, DoorCell> doors, int x, int z, int y) {
 		if (doors.isEmpty()) return false;
-		DoorCell d = doors.get(Hashing.pack(x, z));
-		if (d != null && d.floorWalk() == floorWalk) return true;
-		for (int[] dir : DIRS) {
-			d = doors.get(Hashing.pack(x + dir[0], z + dir[1]));
-			if (d != null && d.floorWalk() == floorWalk) return true;
+		for (int k = -1; k < DIRS.length; k++) {
+			DoorCell d = doors.get(Hashing.pack(x + (k < 0 ? 0 : DIRS[k][0]), z + (k < 0 ? 0 : DIRS[k][1])));
+			if (d != null && y >= d.floorWalk() - 1 && y <= d.floorWalk() + 2) return true;
 		}
 		return false;
 	}

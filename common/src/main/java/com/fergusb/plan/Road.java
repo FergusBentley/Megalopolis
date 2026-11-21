@@ -12,6 +12,7 @@ public final class Road {
 	public boolean coastal;
 	public boolean external; // link between two superblocks
 	public boolean link;
+	public boolean jog;
 
 	Road copy() {
 		Road r = new Road(xs, zs, halfWidth, kind);
@@ -19,6 +20,7 @@ public final class Road {
 		r.coastal = coastal;
 		r.external = external;
 		r.link = link;
+		r.jog = jog;
 		return r;
 	}
 

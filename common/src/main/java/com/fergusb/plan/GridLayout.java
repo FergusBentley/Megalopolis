@@ -39,6 +39,7 @@ final class GridLayout {
 		if (streetsOnly) return;
 		streets.addAll(external);
 		for (Road link : external) RoadNetwork.clearStraysUnder(streets, link);
+		for (Road jog : external) if (jog.jog) RoadNetwork.clearUnder(streets, jog);
 		List<Obb> taken = new ArrayList<>();
 		List<Road> links = new ArrayList<>(external);
 		for (RoadNetwork.DeadEnd d : RoadNetwork.connect(planner, streets, bounds, links)) {

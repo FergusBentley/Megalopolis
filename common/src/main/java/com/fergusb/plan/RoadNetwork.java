@@ -24,6 +24,7 @@ final class RoadNetwork {
 			if (!link(planner, streets, bounds, added)) break;
 		}
 		for (int round = 0; ; round++) {
+			clearBridgeScraps(streets);
 			List<DeadEnd> ends = connectOnce(planner, streets, bounds);
 			boolean trimmed = false;
 			for (DeadEnd d : ends) {
@@ -31,12 +32,47 @@ final class RoadNetwork {
 				if (p.stateAt(d.sample()) != RoadProfile.State.BRIDGE) continue;
 				int k = d.sample(), step = d.atStart() ? 1 : -1;
 				int a = k;
-				while (k >= 0 && k < p.samples() && p.stateAt(k) == RoadProfile.State.BRIDGE) k += step;
+				Road self = streets.get(d.road());
+				while (k >= 0 && k < p.samples() && p.stateAt(k) == RoadProfile.State.BRIDGE
+						&& (Math.abs(k - a) <= 6 || !meets(streets, self, k))) k += step;
 				p.clear(Math.min(a, k - step), Math.max(a, k - step));
 				trimmed = true;
 			}
-			if (!trimmed || round >= 6) return ends;
+			if (!trimmed || round >= 12) return ends;
 		}
+	}
+
+	private static void clearBridgeScraps(List<Road> streets) {
+		for (Road r : streets) {
+			RoadProfile p = r.profile;
+			if (p == null) continue;
+			int n = p.samples();
+			for (int k = 0; k < n; k++) {
+				if (p.stateAt(k) != RoadProfile.State.BRIDGE) continue;
+				int a = k;
+				while (k + 1 < n && p.stateAt(k + 1) == RoadProfile.State.BRIDGE) k++;
+				boolean noneBefore = a == 0 || p.stateAt(a - 1) == RoadProfile.State.NONE;
+				boolean noneAfter = k == n - 1 || p.stateAt(k + 1) == RoadProfile.State.NONE;
+				if (noneBefore && noneAfter && k - a + 1 <= 3 && n > k - a + 1) p.clear(a, k);
+			}
+		}
+	}
+
+	private static boolean meets(List<Road> streets, Road self, int k) {
+		for (Road o : streets) {
+			if (o == self || o.profile == null) continue;
+			RoadProfile op = o.profile;
+			int f0 = 0, f1 = op.samples() - 1;
+			while (f0 <= f1 && !built(op.stateAt(f0))) f0++;
+			while (f1 >= f0 && !built(op.stateAt(f1))) f1--;
+			if (f0 > f1) continue;
+			for (int e : new int[] {f0, f1}) {
+				double[] pe = o.pointAt(Math.min(e, o.length()));
+				if (!self.containsWithin(pe[0], pe[1], self.halfWidth + o.halfWidth + 1)) continue;
+				if (Math.abs(self.arcAt(pe[0], pe[1]) - k) <= 1) return true;
+			}
+		}
+		return false;
 	}
 
 	private static final class Net {
@@ -385,6 +421,69 @@ final class RoadNetwork {
 				while (b < p.samples() - 1 && p.stateAt(b + 1) == RoadProfile.State.BRIDGE) b++;
 				p.clear(a, b);
 				k = b;
+			}
+		}
+	}
+
+	private static boolean under(Road o, Road over, int k) {
+		double[] q = o.pointAt(Math.min(k, o.length()));
+		if (over.containsWithin(q[0], q[1], over.halfWidth + 0.5)) return true;
+		double reach = over.halfWidth + o.halfWidth + 1.5;
+		if (!over.containsWithin(q[0], q[1], reach)) return false;
+		double[] a = o.pointAt(Math.max(0, Math.min(k, o.length()) - 1)), c = o.pointAt(Math.min(k + 1, o.length()));
+		double tx = c[0] - a[0], tz = c[1] - a[1], tl = Math.hypot(tx, tz);
+		if (tl == 0) return false;
+		double[] n = over.nearest(q[0], q[1]);
+		return Math.abs(tx / tl * n[2] + tz / tl * n[3]) > 0.8;
+	}
+
+	static void clearUnder(List<Road> streets, Road over) {
+		for (Road o : streets) {
+			if (o == over || o.profile == null || o.jog) continue;
+			if (o.maxX < over.minX || o.minX > over.maxX || o.maxZ < over.minZ || o.minZ > over.maxZ) continue;
+			RoadProfile p = o.profile;
+			for (int k = 0; k < p.samples(); k++) {
+				if (!under(o, over, k)) continue;
+				int b = k;
+				while (b + 1 < p.samples() && under(o, over, b + 1)) b++;
+				p.clear(k, b);
+				if (over.profile != null) {
+					for (int e : new int[] {k - 1, b + 1}) {
+						if (e < 0 || e >= p.samples() || p.stateAt(e) == RoadProfile.State.NONE) continue;
+						double[] qe = o.pointAt(Math.min(e, o.length()));
+						double target = over.profile.height(over.arcAt(qe[0], qe[1]));
+						int dir = e < k ? -1 : 1, free = 0;
+						for (int f = e + dir; f >= 0 && f < p.samples(); f += dir) {
+							double[] qf = o.pointAt(Math.min(f, o.length()));
+							if (!over.containsWithin(qf[0], qf[1], over.halfWidth + o.halfWidth + 3)) break;
+							free++;
+						}
+						p.pinEnd(e, dir, target, RoadProfile.STREET_SLOPE, free);
+					}
+				}
+				k = b;
+			}
+			if (over.profile == null) continue;
+			int f0 = 0, f1 = p.samples() - 1;
+			while (f0 < p.samples() && p.stateAt(f0) == RoadProfile.State.NONE) f0++;
+			while (f1 >= 0 && p.stateAt(f1) == RoadProfile.State.NONE) f1--;
+			if (f0 > f1) continue;
+			for (int e : new int[] {f0, f1}) {
+				double[] qe = o.pointAt(Math.min(e, o.length()));
+				double reach = over.halfWidth + o.halfWidth + 1;
+				if (!over.containsWithin(qe[0], qe[1], reach) || over.containsWithin(qe[0], qe[1], over.halfWidth + 0.5)) continue;
+				int dir = e == f0 ? 1 : -1;
+				double[] qn = o.pointAt(Math.min(Math.max(0, e + dir * 2), o.length()));
+				double tx = qe[0] - qn[0], tz = qe[1] - qn[1], tl = Math.hypot(tx, tz);
+				double[] n = over.nearest(qe[0], qe[1]);
+				if (tl == 0 || Math.abs(tx / tl * n[2] + tz / tl * n[3]) > 0.5) continue;
+				int free = 0;
+				for (int f = e + dir; f >= 0 && f < p.samples(); f += dir) {
+					double[] qf = o.pointAt(Math.min(f, o.length()));
+					if (!over.containsWithin(qf[0], qf[1], over.halfWidth + o.halfWidth + 3)) break;
+					free++;
+				}
+				p.pinEnd(e, dir, over.profile.height(over.arcAt(qe[0], qe[1])), RoadProfile.STREET_SLOPE, free);
 			}
 		}
 	}

@@ -100,6 +100,16 @@ final class OrganicLayout {
 		if (streetsOnly) return;
 		streets.addAll(external);
 		for (Road link : external) RoadNetwork.clearStraysUnder(streets, link);
+		for (Road jog : external) if (jog.jog) RoadNetwork.clearUnder(streets, jog);
+		for (Road jog : external) {
+			if (!jog.jog || jog.profile == null) continue;
+			for (int k = 0; k < junctions.size(); k++) {
+				Junction jn = junctions.get(k);
+				if (!jog.containsWithin(jn.x(), jn.z(), jog.halfWidth + jn.r() + 1)) continue;
+				double h = Math.round(jog.profile.height(jog.arcAt(jn.x(), jn.z())) * 2) / 2.0;
+				junctions.set(k, new Junction(jn.x(), jn.z(), jn.r(), h, jn.road()));
+			}
+		}
 		List<Obb> taken = new ArrayList<>();
 		for (RoadNetwork.DeadEnd d : RoadNetwork.connect(planner, streets, bounds, null)) {
 			Obb t = RoadNetwork.terminalLot(d);

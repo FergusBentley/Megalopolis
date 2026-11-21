@@ -55,13 +55,19 @@ final class ParkDecorator {
 					continue;
 				}
 
-				if (kind == Kind.PARK && onPath(cell.lot(), x, z)) {
+				ParkPaths.Plan paths = kind == Kind.PARK ? ParkPaths.of(planner, cell.lot())
+						: surf.parkSide(dx, dz) ? nearPark(planner, surf, dx, dz) : null;
+				if (paths != null && paths.path(x, z)) {
 					CityPlacer.set(level, pos.set(x, y - 1, z), Blocks.DIRT_PATH.defaultBlockState());
-					if (atPathCrossing(cell.lot(), x, z)) {
-						CityPlacer.set(level, pos.set(x, y, z), Blocks.OAK_FENCE.defaultBlockState());
-						CityPlacer.set(level, pos.set(x, y + 1, z), Blocks.LANTERN.defaultBlockState());
-					}
 					planted[dx][dz] = true; // keep trees off paths
+					continue;
+				}
+				if (paths != null && paths.lamp(x, z)) {
+					BlockState soil = soil(biome);
+					if (soil != null) CityPlacer.set(level, pos.set(x, y - 1, z), soil);
+					CityPlacer.set(level, pos.set(x, y, z), Blocks.OAK_FENCE.defaultBlockState());
+					CityPlacer.set(level, pos.set(x, y + 1, z), Blocks.LANTERN.defaultBlockState());
+					planted[dx][dz] = true;
 					continue;
 				}
 				BlockState soil = soil(biome);
@@ -104,6 +110,19 @@ final class ParkDecorator {
 
 	private enum Kind { NONE, PARK, GREEN, OPEN, WILD }
 
+	private static ParkPaths.Plan nearPark(CityPlanner planner, Surface surf, int dx, int dz) {
+		for (int r = 1; r <= 6; r++) {
+			for (int ox = -r; ox <= r; ox++) {
+				for (int oz = -r; oz <= r; oz++) {
+					if (Math.max(Math.abs(ox), Math.abs(oz)) != r) continue;
+					CityPlanner.Cell c = surf.cell(dx + ox, dz + oz);
+					if (c.kind() == CityPlanner.Kind.LOT && c.lot().use() == Lot.Use.PARK) return ParkPaths.of(planner, c.lot());
+				}
+			}
+		}
+		return null;
+	}
+
 	private static int naturalTop(WorldGenLevel level, BlockPos.MutableBlockPos pos, int x, int z, int near) {
 		int hi = Math.min(level.getMaxY(), near + 32), lo = Math.max(level.getMinY() + 1, near - 32);
 		for (int y = hi; y >= lo; y--) {
@@ -133,6 +152,7 @@ final class ParkDecorator {
 
 	private static Kind kind(CityPlanner.Cell cell, Surface surf, int dx, int dz) {
 		if (surf.natural(dx, dz) && !surf.builtRoad(dx, dz)) return Kind.WILD;
+		if (surf.parkSide(dx, dz)) return Kind.GREEN;
 		if (cell.kind() == CityPlanner.Kind.LOT) {
 			if (cell.lot().use() == Lot.Use.PARK) return Kind.PARK;
 			return Kind.NONE;
@@ -154,20 +174,6 @@ final class ParkDecorator {
 			}
 		}
 		return true;
-	}
-
-	// paths
-
-	private static boolean onPath(Lot lot, int x, int z) {
-		Obb b = lot.bounds();
-		if (Math.min(b.widthU(), b.depthV()) < 14) return false;
-		return Math.abs(b.u(x, z)) <= 0.75 || Math.abs(b.v(x, z)) <= 0.75;
-	}
-
-	private static boolean atPathCrossing(Lot lot, int x, int z) {
-		Obb b = lot.bounds();
-		return Math.abs(Math.abs(b.u(x, z)) - 2) < 0.5 && Math.abs(Math.abs(b.v(x, z)) - 2) < 0.5
-				&& Math.signum(b.u(x, z)) > 0 && Math.signum(b.v(x, z)) > 0;
 	}
 
 	// biome choices

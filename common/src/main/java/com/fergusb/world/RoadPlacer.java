@@ -84,7 +84,9 @@ final class RoadPlacer {
 			tunnel(dx, dz, k, half, m);
 			return;
 		}
-		boolean rail = open || islet || onDeck && !besideBuilding(dx, dz);
+		boolean besideFill = false;
+		for (int[] d : DIRS) besideFill |= surf.filled(dx + d[0], dz + d[1]) && !surf.builtRoad(dx + d[0], dz + d[1]);
+		boolean rail = open || islet || onDeck && !besideBuilding(dx, dz) && !besideFill;
 		if (edge && rail && !surf.facesDoor(dx, dz)) {
 			RoadProfile.Railing railing = bridge != null ? bridge.railing()
 					: rp.straight() ? rp.railing() : RoadProfile.Railing.CRENEL;

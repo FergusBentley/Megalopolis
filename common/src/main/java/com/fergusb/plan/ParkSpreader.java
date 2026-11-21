@@ -34,6 +34,27 @@ final class ParkSpreader {
 				}
 			}
 		}
+		return absorb(out);
+	}
+
+	static List<Lot> absorb(List<Lot> lots) {
+		List<Lot> out = new ArrayList<>(lots);
+		List<Integer> front = new ArrayList<>();
+		for (int i = 0; i < out.size(); i++) if (out.get(i).use() == Lot.Use.PARK) front.add(i);
+		for (int step = 0; step < 2 && !front.isEmpty(); step++) {
+			List<Integer> next = new ArrayList<>();
+			for (int i : front) {
+				Obb a = out.get(i).bounds();
+				for (int k = 0; k < out.size(); k++) {
+					Lot other = out.get(k);
+					if (other.use() != Lot.Use.GREEN && other.use() != Lot.Use.UNBUILDABLE || !touches(a, other.bounds())) continue;
+					out.set(k, new Lot(other.bounds(), null, Lot.Use.PARK, other.baseY(), 0,
+							other.downtown(), other.condition(), other.seed(), null, other.mask()));
+					next.add(k);
+				}
+			}
+			front = next;
+		}
 		return out;
 	}
 

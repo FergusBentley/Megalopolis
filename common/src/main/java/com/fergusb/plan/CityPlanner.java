@@ -113,30 +113,43 @@ public final class CityPlanner {
 	private static final double JUNCTION_FLAT = ARTERIAL_HALF_WIDTH + 2;
 
 	private double intersectionHeight(int c, int r) {
-		return RoadProfile.junctionHeight(this, arterialX(c), arterialZ(r));
+		return RoadProfile.junctionHeight(this, arterialX(c), arterialZ(r), true);
 	}
 
 	private RoadProfile arterialProfile(boolean alongZ, int line, int seg) {
 		long key = Hashing.hash(alongZ ? 11 : 12, line, seg);
 		RoadProfile cached = arterialProfiles.get(key);
 		if (cached != null) return cached;
-		RoadProfile p;
+		RoadProfile p = buildArterial(alongZ, line, seg, List.of());
+		Jog j = makeJog(alongZ, line, seg, p);
+		if (j != null) {
+			int r = ARTERIAL_HALF_WIDTH + 2;
+			p = buildArterial(alongZ, line, seg, List.of(
+					new RoadProfile.Flat(j.a() - r, j.a() + r, p.height(j.a())),
+					new RoadProfile.Flat(j.a() + j.len() - r, j.a() + j.len() + r, p.height(j.a() + j.len()))));
+		}
+		if (arterialProfiles.size() > 4096) {
+			arterialProfiles.clear();
+			jogs.clear();
+		}
+		jogs.putIfAbsent(Hashing.hash(alongZ ? 17 : 18, line, seg), j == null ? NO_JOG : j);
+		RoadProfile prev = arterialProfiles.putIfAbsent(key, p);
+		return prev != null ? prev : p;
+	}
+
+	private RoadProfile buildArterial(boolean alongZ, int line, int seg, List<RoadProfile.Flat> extra) {
 		if (alongZ) {
 			int x = arterialX(line), z0 = arterialZ(seg), z1 = arterialZ(seg + 1);
 			RoadStyle style = RoadStyle.forArterial(terrain.biome(x, (z0 + z1) / 2), Hashing.unit(Hashing.hash(seed, 13, line, seg)));
-			p = RoadProfile.build(this, s -> new double[] {x, z0 + s}, z1 - z0,
-					RoadProfile.endFlats(z1 - z0, intersectionHeight(line, seg), intersectionHeight(line, seg + 1), JUNCTION_FLAT),
-					0.25, style, true, true, Hashing.hash(seed, 15, line, seg));
-		} else {
-			int z = arterialZ(line), x0 = arterialX(seg), x1 = arterialX(seg + 1);
-			RoadStyle style = RoadStyle.forArterial(terrain.biome((x0 + x1) / 2, z), Hashing.unit(Hashing.hash(seed, 14, line, seg)));
-			p = RoadProfile.build(this, s -> new double[] {x0 + s, z}, x1 - x0,
-					RoadProfile.endFlats(x1 - x0, intersectionHeight(seg, line), intersectionHeight(seg + 1, line), JUNCTION_FLAT),
-					0.25, style, true, true, Hashing.hash(seed, 16, line, seg));
+			List<RoadProfile.Flat> flats = new ArrayList<>(RoadProfile.endFlats(z1 - z0, intersectionHeight(line, seg), intersectionHeight(line, seg + 1), JUNCTION_FLAT));
+			flats.addAll(extra);
+			return RoadProfile.build(this, s -> new double[] {x, z0 + s}, z1 - z0, flats, 0.25, style, true, true, Hashing.hash(seed, 15, line, seg));
 		}
-		if (arterialProfiles.size() > 4096) arterialProfiles.clear();
-		RoadProfile prev = arterialProfiles.putIfAbsent(key, p);
-		return prev != null ? prev : p;
+		int z = arterialZ(line), x0 = arterialX(seg), x1 = arterialX(seg + 1);
+		RoadStyle style = RoadStyle.forArterial(terrain.biome((x0 + x1) / 2, z), Hashing.unit(Hashing.hash(seed, 14, line, seg)));
+		List<RoadProfile.Flat> flats = new ArrayList<>(RoadProfile.endFlats(x1 - x0, intersectionHeight(seg, line), intersectionHeight(seg + 1, line), JUNCTION_FLAT));
+		flats.addAll(extra);
+		return RoadProfile.build(this, s -> new double[] {x0 + s, z}, x1 - x0, flats, 0.25, style, true, true, Hashing.hash(seed, 16, line, seg));
 	}
 
 	/** Where a column sits on the road network */
@@ -175,20 +188,46 @@ public final class CityPlanner {
 					p = a;
 				}
 			}
-			double h = arms[0].height(0); // every arm is held at the crossing's height here
-			return new RoadPoint(h, arms[0].state(0), p, 0, false, true, true);
+			double[] ends = new double[4];
+			RoadProfile.State[] states = new RoadProfile.State[4];
+			for (int k = 0; k < 4; k++) {
+				double s = k % 2 == 0 ? 0 : arms[k].samples() - 1;
+				ends[k] = arms[k].height(s);
+				states[k] = arms[k].state(s);
+			}
+			int pick = -1, pickVotes = 0;
+			for (int k = 0; k < 4; k++) {
+				if (states[k] == RoadProfile.State.NONE) continue;
+				int votes = 0;
+				for (int m = 0; m < 4; m++) if (states[m] != RoadProfile.State.NONE && Math.abs(ends[m] - ends[k]) < 0.25) votes++;
+				if (votes > pickVotes) {
+					pickVotes = votes;
+					pick = k;
+				}
+			}
+			if (pick < 0) pick = 0;
+			return new RoadPoint(ends[pick], states[pick], p, 0, false, true, true);
 		}
 		if (c != Integer.MIN_VALUE) {
 			int r0 = Math.floorDiv(z, CELL), row = z < arterialZ(r0) ? r0 - 1 : r0;
 			RoadProfile p = arterialProfile(true, c, row);
 			double s = z - arterialZ(row);
-			return new RoadPoint(p.height(s), p.state(s), p, s, x == arterialX(c) && !p.isMinor(s), true, true);
+			return new RoadPoint(p.height(s), p.state(s), p, s, centerLine(true, c, row, (int) s, x - arterialX(c)) && !p.isMinor(s), true, true);
 		}
 		if (r == Integer.MIN_VALUE) return null;
 		int c0 = Math.floorDiv(x, CELL), seg = x < arterialX(c0) ? c0 - 1 : c0;
 		RoadProfile p = arterialProfile(false, r, seg);
 		double s = x - arterialX(seg);
-		return new RoadPoint(p.height(s), p.state(s), p, s, z == arterialZ(r) && !p.isMinor(s), true, true);
+		return new RoadPoint(p.height(s), p.state(s), p, s, centerLine(false, r, seg, (int) s, z - arterialZ(r)) && !p.isMinor(s), true, true);
+	}
+
+	private boolean centerLine(boolean alongZ, int line, int seg, int s, int lateral) {
+		Jog j = jog(alongZ, line, seg);
+		if (j == null) return lateral == 0;
+		if (s == j.a() || s == j.a() + j.len()) {
+			return lateral == 0 || Integer.signum(lateral) == Integer.signum(j.off()) && Math.abs(lateral) <= ARTERIAL_HALF_WIDTH;
+		}
+		return lateral == 0 && (s < j.a() || s > j.a() + j.len());
 	}
 
 	public boolean arterialAnchored(int x, int z) {
@@ -258,6 +297,291 @@ public final class CityPlanner {
 		return n;
 	}
 
+	// arterial jogs
+
+	public record Jog(boolean alongZ, int line, int seg, int a, int len, int off) {}
+
+	private static final Jog NO_JOG = new Jog(false, 0, 0, 0, 0, 0);
+	private final ConcurrentHashMap<Long, Jog> jogs = new ConcurrentHashMap<>();
+
+	private static final double JOG_CHANCE = 0.6;
+	private static final int JOG_TRIES = 6;
+	private static final int JOG_MIN_OFF = 30, JOG_MAX_OFF = 80, JOG_MIN_LEN = 80, JOG_MAX_LEN = 200;
+
+	/** The jog on an arterial segment */
+	public Jog jog(boolean alongZ, int line, int seg) {
+		long key = Hashing.hash(alongZ ? 17 : 18, line, seg);
+		Jog j = jogs.get(key);
+		if (j == null) {
+			arterialProfile(alongZ, line, seg);
+			j = jogs.get(key);
+			if (j == null) {
+				j = makeJog(alongZ, line, seg, buildArterial(alongZ, line, seg, List.of()));
+				if (j == null) j = NO_JOG;
+				jogs.putIfAbsent(key, j);
+			}
+		}
+		return j == NO_JOG ? null : j;
+	}
+
+	private Jog makeJog(boolean alongZ, int line, int seg, RoadProfile p) {
+		long h = Hashing.hash(seed, 19, alongZ ? 1 : 0, line, seg);
+		if (Hashing.unit(Hashing.hash(h, 0)) >= JOG_CHANCE) return null;
+		for (int t = 0; t < JOG_TRIES; t++) {
+			Jog j = tryJog(alongZ, line, seg, p, Hashing.hash(h, 10 + t));
+			if (j != null) return j;
+		}
+		return null;
+	}
+
+	private Jog tryJog(boolean alongZ, int line, int seg, RoadProfile p, long h) {
+		int n = p.samples();
+		int len = JOG_MIN_LEN + (int) (Hashing.unit(Hashing.hash(h, 1)) * (JOG_MAX_LEN - JOG_MIN_LEN + 1)); // beside the line
+		int mag = JOG_MIN_OFF + (int) (Hashing.unit(Hashing.hash(h, 2)) * (JOG_MAX_OFF - JOG_MIN_OFF + 1)); // how far aside
+		int off = Hashing.unit(Hashing.hash(h, 3)) < 0.5 ? mag : -mag;
+		int margin = 96;
+		int room = n - 1 - 2 * margin - len;
+		if (room < 0) return null;
+		int a = margin + (int) (Hashing.unit(Hashing.hash(h, 4)) * (room + 1));
+		// Only where the arterial is there and on land
+		for (int k = a - 24; k <= a + len + 24; k++) {
+			if (k < 0 || k >= n || p.stateAt(k) != RoadProfile.State.GROUND || p.isMinor(k)) return null;
+		}
+		int base = alongZ ? arterialX(line) : arterialZ(line);
+		int start = alongZ ? arterialZ(seg) : arterialX(seg);
+		for (int k = a; k <= a + len; k += 8) {
+			for (int lat = 0; lat <= Math.abs(off) + ARTERIAL_HALF_WIDTH; lat += 4) {
+				int across = base + Integer.signum(off) * lat, along = start + k;
+				if (alongZ ? grade.water(across, along) : grade.water(along, across)) return null;
+			}
+		}
+		return new Jog(alongZ, line, seg, a, len, off);
+	}
+
+	Road jogRoad(Jog j) {
+		int base = j.alongZ() ? arterialX(j.line()) : arterialZ(j.line());
+		int start = j.alongZ() ? arterialZ(j.seg()) : arterialX(j.seg());
+		int inner = base + Integer.signum(j.off()) * (ARTERIAL_HALF_WIDTH - 1);
+		double[] across = {inner, base + j.off(), base + j.off(), inner};
+		double[] along = {start + j.a(), start + j.a(), start + j.a() + j.len(), start + j.a() + j.len()};
+		Road r = j.alongZ() ? new Road(across, along, ARTERIAL_HALF_WIDTH, Road.Kind.STREET)
+				: new Road(along, across, ARTERIAL_HALF_WIDTH, Road.Kind.STREET);
+		RoadProfile ap = arterialProfile(j.alongZ(), j.line(), j.seg());
+		long rs = Hashing.hash(seed, 20, j.alongZ() ? 1 : 0, j.line(), j.seg());
+		List<RoadProfile.Flat> flats = new ArrayList<>(
+				RoadProfile.endFlats(r.length(), ap.height(j.a()), ap.height(j.a() + j.len()), ARTERIAL_HALF_WIDTH + 2));
+		RoadProfile free = RoadProfile.build(this, r::pointAt, r.length(), flats, 0.25, ap.style, true, true, rs);
+		double leg = Math.abs(j.off()) - (ARTERIAL_HALF_WIDTH - 1), hold = ARTERIAL_HALF_WIDTH + 2;
+		for (double corner : new double[] {leg, leg + j.len()}) {
+			flats.add(new RoadProfile.Flat(corner - hold, corner + hold, free.height(corner)));
+		}
+		for (Connector c : connectors(j)) {
+			double at = leg + (c.along() - (start + j.a()));
+			flats.add(new RoadProfile.Flat(at - c.half() - 2, at + c.half() + 2, free.height(at)));
+		}
+		int[] side = jogSide(j);
+		List<Road> own = summary(side[0], side[1]).streets();
+		Road runRoad = null;
+		double runFrom = 0;
+		double step = 1;
+		for (double at = 0; at <= r.length() + step; at += step) {
+			Road here = null;
+			if (at <= r.length()) {
+				double[] q = r.pointAt(at), t = r.nearest(q[0], q[1]);
+				for (Road o : own) {
+					if (o.profile == null) continue;
+					double[] n = o.nearest(q[0], q[1]);
+					double ex = q[0] - n[0], ez = q[1] - n[1];
+					if (Math.abs(ex * t[2] + ez * t[3]) > o.halfWidth + 0.5) continue;
+					if (Math.abs(-ex * t[3] + ez * t[2]) > ARTERIAL_HALF_WIDTH + 1) continue;
+					if (Math.abs(n[2] * t[2] + n[3] * t[3]) < 0.5) {
+						here = o;
+						break;
+					}
+				}
+			}
+			if (here != runRoad) {
+				if (runRoad != null) {
+					double mid = (runFrom + at - step) / 2, half = (at - step - runFrom) / 2;
+					double lo = mid - half - 2, hi = mid + half + 2;
+					boolean clash = false;
+					for (RoadProfile.Flat f : flats) if (lo < f.s1() + 1 && hi > f.s0() - 1) clash = true;
+					if (!clash && lo > 0 && hi < r.length()) flats.add(new RoadProfile.Flat(lo, hi, free.height(mid)));
+				}
+				runRoad = here;
+				runFrom = at;
+			}
+		}
+		r.profile = RoadProfile.build(this, r::pointAt, r.length(), flats, 0.25, ap.style, true, true, rs);
+		r.jog = true;
+		return r;
+	}
+
+	/** Jogs stepping into superblock (i, j) from the four arterials around it */
+	private List<Jog> jogsInto(int i, int j) {
+		List<Jog> out = new ArrayList<>();
+		Jog[] sides = {jog(true, i, j), jog(true, i + 1, j), jog(false, j, i), jog(false, j + 1, i)};
+		int[] into = {1, -1, 1, -1};
+		for (int k = 0; k < 4; k++) {
+			if (sides[k] != null && Integer.signum(sides[k].off()) == into[k]) out.add(sides[k]);
+		}
+		return out;
+	}
+
+	/** True if (x, z) is in a stretch of arterial band left empty by a jog */
+	private boolean inVacated(int x, int z) {
+		int c = arterialColAt(x), r = arterialRowAt(z);
+		return vacated(x, z, c != Integer.MIN_VALUE ? 0 : Integer.MAX_VALUE, r != Integer.MIN_VALUE ? 0 : Integer.MAX_VALUE) != null;
+	}
+
+	/** The ground a jog encloses between the arterial's band and itself */
+	private Road jogStripRoad(Jog j) {
+		int base = j.alongZ() ? arterialX(j.line()) : arterialZ(j.line());
+		int start = j.alongZ() ? arterialZ(j.seg()) : arterialX(j.seg());
+		int sign = Integer.signum(j.off());
+		double lo = ARTERIAL_HALF_WIDTH + 1, hi = Math.abs(j.off()) - ARTERIAL_HALF_WIDTH - 1;
+		double mid = base + sign * (lo + hi) / 2, half = (hi - lo) / 2 + 0.5;
+		double[] across = {mid, mid};
+		double[] along = {start + j.a() + ARTERIAL_HALF_WIDTH + 1, start + j.a() + j.len() - ARTERIAL_HALF_WIDTH - 1};
+		return j.alongZ() ? new Road(across, along, half, Road.Kind.STREET) : new Road(along, across, half, Road.Kind.STREET);
+	}
+
+	record Connector(double along, double half, double edgeHeight) {}
+
+	private final ConcurrentHashMap<Jog, List<Connector>> connectorCache = new ConcurrentHashMap<>();
+	private final ConcurrentHashMap<Jog, Road> jogRoadCache = new ConcurrentHashMap<>();
+
+	Road jogRoadShared(Jog j) {
+		Road r = jogRoadCache.get(j);
+		if (r == null) {
+			r = jogRoad(j);
+			if (jogRoadCache.size() > 1024) jogRoadCache.clear();
+			Road prev = jogRoadCache.putIfAbsent(j, r);
+			if (prev != null) r = prev;
+		}
+		return r;
+	}
+
+	private int[] awaySide(Jog j) {
+		int other = j.off() > 0 ? j.line() - 1 : j.line();
+		return j.alongZ() ? new int[] {other, j.seg()} : new int[] {j.seg(), other};
+	}
+
+	private int[] jogSide(Jog j) {
+		int into = j.off() > 0 ? j.line() : j.line() - 1;
+		return j.alongZ() ? new int[] {into, j.seg()} : new int[] {j.seg(), into};
+	}
+
+	List<Connector> connectors(Jog j) {
+		List<Connector> out = connectorCache.get(j);
+		if (out != null) return out;
+		int[] b = awaySide(j);
+		RoadNetwork.Summary sm = summary(b[0], b[1]);
+		int base = j.alongZ() ? arterialX(j.line()) : arterialZ(j.line());
+		int start = j.alongZ() ? arterialZ(j.seg()) : arterialX(j.seg());
+		int edge = base - Integer.signum(j.off()) * (ARTERIAL_HALF_WIDTH + 1);
+		int from = start + j.a() + ARTERIAL_HALF_WIDTH + 1, to = start + j.a() + j.len() - ARTERIAL_HALF_WIDTH - 1;
+		out = new ArrayList<>();
+		Road run = null;
+		int runFrom = 0;
+		for (int v = from; v <= to + 1; v++) {
+			Road here = null;
+			if (v <= to) {
+				int ex = j.alongZ() ? edge : v, ez = j.alongZ() ? v : edge;
+				for (Road r : sm.streets()) {
+					if (r.profile == null || !r.contains(ex, ez) || r.profile.state(r.arcAt(ex, ez)) == RoadProfile.State.NONE) continue;
+					double[] n = r.nearest(ex, ez);
+					if ((j.alongZ() ? Math.abs(n[2]) : Math.abs(n[3])) > 0.7) {
+						here = r;
+						break;
+					}
+				}
+			}
+			if (here != run) {
+				if (run != null) {
+					double center = (runFrom + v - 1) / 2.0, half = (v - 1 - runFrom) / 2.0;
+					double margin = ARTERIAL_HALF_WIDTH + half + 6;
+					if (center - (start + j.a()) > margin && (start + j.a() + j.len()) - center > margin) {
+						int ex = j.alongZ() ? edge : (int) Math.round(center), ez = j.alongZ() ? (int) Math.round(center) : edge;
+						out.add(new Connector(center, half, run.profile.height(run.arcAt(ex, ez))));
+					}
+				}
+				run = here;
+				runFrom = v;
+			}
+		}
+		if (connectorCache.size() > 1024) connectorCache.clear();
+		List<Connector> prev = connectorCache.putIfAbsent(j, out);
+		return prev != null ? prev : out;
+	}
+
+	private Road connectorRoad(Jog j, Connector c) {
+		int base = j.alongZ() ? arterialX(j.line()) : arterialZ(j.line());
+		int sign = Integer.signum(j.off());
+		double[] across = {base - sign * ARTERIAL_HALF_WIDTH, base + j.off()};
+		double[] along = {c.along(), c.along()};
+		Road r = j.alongZ() ? new Road(across, along, c.half(), Road.Kind.STREET) : new Road(along, across, c.half(), Road.Kind.STREET);
+		Road jr = jogRoadShared(j);
+		double[] onJog = j.alongZ() ? new double[] {base + j.off(), c.along()} : new double[] {c.along(), base + j.off()};
+		double jogH = jr.profile.height(jr.arcAt(onJog[0], onJog[1]));
+		List<RoadProfile.Flat> flats = List.of(new RoadProfile.Flat(0, 2, c.edgeHeight()),
+				new RoadProfile.Flat(r.length() - ARTERIAL_HALF_WIDTH - 1, r.length(), jogH));
+		r.profile = RoadProfile.build(this, r::pointAt, r.length(), flats, RoadProfile.STREET_SLOPE, jr.profile.style, false, true,
+				Hashing.hash(seed, 23, (long) Math.floor(c.along()), j.line()));
+		r.jog = true;
+		r.external = true;
+		return r;
+	}
+
+	private List<Lot> bandLots(Jog j, List<Road> streets, Rng rng) {
+		int base = j.alongZ() ? arterialX(j.line()) : arterialZ(j.line());
+		int start = j.alongZ() ? arterialZ(j.seg()) : arterialX(j.seg());
+		List<double[]> free = new ArrayList<>();
+		double lo = start + j.a() + ARTERIAL_HALF_WIDTH + 1, hi = start + j.a() + j.len() - ARTERIAL_HALF_WIDTH - 1;
+		double cur = lo;
+		for (Connector c : connectors(j)) {
+			double c0 = c.along() - c.half() - 0.5, c1 = c.along() + c.half() + 0.5;
+			if (c0 - cur >= 6) free.add(new double[] {cur, c0 - 1});
+			cur = Math.max(cur, c1 + 1);
+		}
+		if (hi - cur >= 5) free.add(new double[] {cur, hi});
+		List<Lot> out = new ArrayList<>();
+		for (double[] f : free) {
+			int len = (int) (f[1] - f[0]) + 1, pieces = Math.max(1, (int) Math.round(len / 28.0));
+			for (int k = 0; k < pieces; k++) {
+				int p0 = (int) Math.round(f[0] + len * k / (double) pieces), p1 = (int) Math.round(f[0] + len * (k + 1) / (double) pieces) - 1;
+				if (p1 - p0 + 1 < 5) continue;
+				Rect r = j.alongZ() ? new Rect(base - ARTERIAL_HALF_WIDTH, p0, base + ARTERIAL_HALF_WIDTH, p1)
+						: new Rect(p0, base - ARTERIAL_HALF_WIDTH, p1, base + ARTERIAL_HALF_WIDTH);
+				out.add(finishLot(Obb.ofRect(r), rng, false, streets));
+			}
+		}
+		return out;
+	}
+
+	private Jog vacated(int x, int z, int dx, int dz) {
+		if ((dx == Integer.MAX_VALUE) == (dz == Integer.MAX_VALUE)) return null;
+		boolean alongZ = dx != Integer.MAX_VALUE;
+		int line = alongZ ? arterialColAt(x) : arterialRowAt(z);
+		int v = alongZ ? z : x;
+		int c0 = Math.floorDiv(v, CELL);
+		int seg = alongZ ? (v < arterialZ(c0) ? c0 - 1 : c0) : (v < arterialX(c0) ? c0 - 1 : c0);
+		Jog j = jog(alongZ, line, seg);
+		if (j == null) return null;
+		int s = v - (alongZ ? arterialZ(seg) : arterialX(seg));
+		return s > j.a() + ARTERIAL_HALF_WIDTH && s < j.a() + j.len() - ARTERIAL_HALF_WIDTH ? j : null;
+	}
+
+	private Cell pocket(int x, int z, Jog j) {
+		int[] a = jogSide(j);
+		Superblock sb = superblock(a[0], a[1]);
+		Road link = sb.bandStreetAt(x, z);
+		if (link != null) return new Cell(Kind.STREET, link, null, 0, 0, null, sb);
+		Lot lot = sb.lotAt(x, z);
+		if (lot != null) return new Cell(Kind.LOT, null, lot, 0, 0, null, sb);
+		return new Cell(Kind.GAP, null, null, 0, 0, null, sb);
+	}
+
 	/** Road point for any road cell */
 	public RoadPoint roadPoint(Cell cell, int x, int z) {
 		if (cell.kind() == Kind.ARTERIAL) {
@@ -271,13 +595,14 @@ public final class CityPlanner {
 		Road road = cell.road();
 		RoadProfile p = road.profile;
 		RoadMap map = cell.block().map;
+		boolean stripe = road.jog && !road.external && road.nearest(x, z)[4] < 0.5;
 		if (!map.covers(x, z)) {
 			double s = road.arcAt(x, z);
-			return new RoadPoint(p.height(s), p.state(s), p, s, false, false, road.axisAligned());
+			return new RoadPoint(p.height(s), p.state(s), p, s, stripe, false, road.axisAligned());
 		}
 		RoadProfile.State st = map.state(x, z);
 		double s = st == RoadProfile.State.BRIDGE ? road.arcAt(x, z) : 0;
-		return new RoadPoint(map.height(x, z), st, p, s, false, false, road.axisAligned());
+		return new RoadPoint(map.height(x, z), st, p, s, stripe, false, road.axisAligned());
 	}
 
 	/** The finished ground height at a column */
@@ -311,6 +636,8 @@ public final class CityPlanner {
 	public Cell classify(int x, int z) {
 		int dx = arterialOffsetX(x), dz = arterialOffsetZ(z);
 		if (dx != Integer.MAX_VALUE || dz != Integer.MAX_VALUE) {
+			Jog jg = vacated(x, z, dx, dz);
+			if (jg != null) return pocket(x, z, jg);
 			// Where the arterial isn't built a link between superblocks can happen
 			RoadPoint ap = arterialPoint(x, z);
 			if (ap != null && ap.state() == RoadProfile.State.NONE && (dx == Integer.MAX_VALUE || dz == Integer.MAX_VALUE)) {
@@ -587,9 +914,12 @@ public final class CityPlanner {
 
 	private Superblock plan(int i, int j) {
 		long t0 = System.nanoTime();
+		BuildingShape.Owner owner = BuildingShape.OWNER.get();
+		BuildingShape.OWNER.remove();
 		try {
 			return planTimed(i, j);
 		} finally {
+			if (owner != null) BuildingShape.OWNER.set(owner);
 			Stats.plans.incrementAndGet();
 			Stats.planNanos.addAndGet(System.nanoTime() - t0);
 		}
@@ -602,6 +932,19 @@ public final class CityPlanner {
 		List<Junction> junctions = new ArrayList<>();
 		boolean organic = isOrganic(bounds);
 		List<Road> external = new ArrayList<>();
+		List<Jog> jogsHere = jogsInto(i, j);
+		List<Road> jogRoads = new ArrayList<>(), jogAreas = new ArrayList<>();
+		for (Jog jg : jogsHere) {
+			Road r = jogRoad(jg);
+			jogRoads.add(r);
+			jogAreas.add(r);
+			for (Connector c : connectors(jg)) {
+				Road cr = connectorRoad(jg, c);
+				jogRoads.add(cr);
+				jogAreas.add(cr);
+			}
+		}
+		external.addAll(jogRoads);
 		for (Road r : crossLinksFrom(i, j)) external.add(r.copy());
 		for (int[] d : SIDES) {
 			if (!sideGap(i, j, d[0], d[1])) continue; // no way across that side
@@ -612,11 +955,33 @@ public final class CityPlanner {
 		}
 		layout(i, j, bounds, organic, external, false, streets, lots, junctions);
 		addLinkPads(streets, junctions);
+		if (!jogsHere.isEmpty()) {
+			for (Jog jg : jogsHere) {
+				Road strip = jogStripRoad(jg);
+				RoadNetwork.clearUnder(streets, strip);
+				junctions.removeIf(jn -> strip.containsWithin(jn.x(), jn.z(), strip.halfWidth + 0.5) && !jn.road().jog);
+			}
+			lots.removeIf(l -> CoastRoads.overlaps(l.bounds(), jogAreas, List.of()));
+		}
 		lots = ParkSpreader.spread(lots, this);
 		java.util.BitSet wild = wildAroundTunnels(bounds, streets);
 		lots.removeIf(l -> touchesWild(l, bounds, wild));
 		lots = FrontageFill.fill(this, bounds, streets, junctions, lots, wild, organic, new Rng(Hashing.hash(seed, 6, i, j)));
 		lots = LotCleanup.apply(this, bounds, streets, junctions, lots, organic, new Rng(Hashing.hash(seed, 7, i, j)));
+		if (!jogsHere.isEmpty()) {
+			Rng bandRng = new Rng(Hashing.hash(seed, 24, i, j));
+			List<Lot> band = new ArrayList<>();
+			for (Jog jg : jogsHere) band.addAll(bandLots(jg, streets, bandRng));
+			lots.addAll(band);
+		}
+		List<Lot> kept = new ArrayList<>(lots.size());
+		for (Lot l : lots) {
+			if (l.use() == Lot.Use.BUILDING && !reachesRoad(l, streets, ROAD_REACH)) {
+				l = new Lot(l.bounds(), null, Lot.Use.PARK, l.baseY(), 0, l.downtown(), l.condition(), l.seed(), null, l.mask());
+			}
+			kept.add(l);
+		}
+		lots = ParkSpreader.absorb(kept);
 		RoadMap map = RoadMap.build(bounds, streets, junctions);
 		lots = downToStreets(lots, map);
 		return new Superblock(i, j, bounds, organic, streets, BuildingDesigner.design(lots, fields, terrain), junctions, wild, map);
@@ -634,6 +999,7 @@ public final class CityPlanner {
 				for (Road o : streets) {
 					if (o == link || o.profile == null || !o.containsWithin(p[0], p[1], o.halfWidth + 0.5)) continue;
 					if (o.profile.state(o.arcAt(p[0], p[1])) != RoadProfile.State.GROUND) continue;
+					if (o.jog) break;
 					junctions.add(new Junction(p[0], p[1], o.halfWidth + 0.5, link.profile.height(s), link));
 					break;
 				}
@@ -712,7 +1078,8 @@ public final class CityPlanner {
 			int extra = Math.max(0, Math.min(MAX_EXTRA_FLOORS, (int) Math.ceil(drop / (double) FLOOR_HEIGHT)));
 			if (drop > extra * FLOOR_HEIGHT) base = lot.baseY() - extra * FLOOR_HEIGHT;
 			int lift = Math.max(0, (int) Math.ceil((hiOut[0] - 1 - base) / (double) FLOOR_HEIGHT));
-			out.add(new Lot(lot.bounds(), lot.footprint(), lot.use(), base, Math.min(MAX_FLOORS, lot.floors() + extra),
+			int floors = Math.max(lot.floors() + extra, lift + 1);
+			out.add(new Lot(lot.bounds(), lot.footprint(), lot.use(), base, Math.min(MAX_FLOORS, floors),
 					lot.downtown(), lot.condition(), lot.seed(), lot.spec(), lot.mask(), lift));
 		}
 		return out;
@@ -851,6 +1218,40 @@ public final class CityPlanner {
 		return new Lot(r, fp, Lot.Use.BUILDING, baseY, floors, dt, cond, lotSeed, draft, null);
 	}
 
+	static final int ROAD_REACH = 4;
+
+	boolean reachesRoad(Lot lot, List<Road> streets, int reach) {
+		Obb o = lot.bounds();
+		double pad = Math.max(o.halfU, o.halfV) * 1.5 + reach + 1;
+		List<Road> near = new ArrayList<>();
+		for (Road road : streets) {
+			if (road.profile != null && road.containsWithin(o.cx, o.cz, road.halfWidth + pad)) near.add(road);
+		}
+		int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+		for (int x = o.minX; x <= o.maxX; x++) {
+			for (int z = o.minZ; z <= o.maxZ; z++) {
+				if (!lot.contains(x, z)) continue;
+				for (int[] d : dirs) {
+					if (lot.contains(x + d[0], z + d[1])) continue;
+					for (int k = 1; k <= reach; k++) {
+						int px = x + d[0] * k, pz = z + d[1] * k;
+						RoadPoint ap = arterialPoint(px, pz);
+						if (ap != null && !inVacated(px, pz)) {
+							if (ap.state() == RoadProfile.State.GROUND || ap.state() == RoadProfile.State.ELEVATED) return true;
+							break;
+						}
+						for (Road road : near) {
+							if (!road.containsWithin(px, pz, road.halfWidth + 0.5)) continue;
+							RoadProfile.State st = road.profile.state(road.arcAt(px, pz));
+							if (st == RoadProfile.State.GROUND || st == RoadProfile.State.ELEVATED) return true;
+						}
+					}
+				}
+			}
+		}
+		return false;
+	}
+
 	/** True if a built road runs along any side of the shape */
 	boolean frontsBuiltRoad(Obb r, List<Road> streets) {
 		double[][] dirs = {{r.ux, r.uz, r.halfU}, {-r.ux, -r.uz, r.halfU}, {-r.uz, r.ux, r.halfV}, {r.uz, -r.ux, r.halfV}};
@@ -858,6 +1259,7 @@ public final class CityPlanner {
 			for (int step = 1; step <= 4; step++) {
 				double px = r.cx + dv[0] * (dv[2] + step), pz = r.cz + dv[1] * (dv[2] + step);
 				RoadPoint ap = arterialPoint((int) Math.round(px), (int) Math.round(pz));
+				if (ap != null && inVacated((int) Math.round(px), (int) Math.round(pz))) ap = null;
 				if (ap != null) {
 					if (ap.state() != RoadProfile.State.BRIDGE && ap.state() != RoadProfile.State.NONE) return true;
 					continue;

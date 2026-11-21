@@ -40,6 +40,8 @@ public final class Megalopolis {
 				ResourceKey.create(Registries.PLACED_FEATURE, id("dripstone_cluster_deep")));
 		platform.addBiomeFeature(dripstoneCaves, GenerationStep.Decoration.UNDERGROUND_DECORATION,
 				ResourceKey.create(Registries.PLACED_FEATURE, id("large_dripstone_deep")));
+		platform.addOverworldFeature(GenerationStep.Decoration.LAKES,
+				ResourceKey.create(Registries.PLACED_FEATURE, id("lake_lava_underground_deep")));
 
 		platform.registerCommands(MegalopolisCommands::register);
 		LOGGER.info("Megalopolis loaded");

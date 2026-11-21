@@ -18,8 +18,17 @@ public final class BuildingShape {
 		if (fp == null || x < fp.minX || x > fp.maxX || z < fp.minZ || z > fp.maxZ) return false;
 		int inset = lot.mask() != null ? 0 : inset(lot, floor);
 		boolean[] g = grid(lot, fp, inset);
-		return g[(x - fp.minX) * (fp.maxZ - fp.minZ + 1) + (z - fp.minZ)];
+		if (!g[(x - fp.minX) * (fp.maxZ - fp.minZ + 1) + (z - fp.minZ)]) return false;
+		Owner owner = OWNER.get();
+		return owner == null || owner.at(x, z) == lot;
 	}
+
+	/** Which lot a column belongs to */
+	public interface Owner {
+		Lot at(int x, int z);
+	}
+
+	public static final ThreadLocal<Owner> OWNER = new ThreadLocal<>();
 
 	public static boolean inside(Lot lot, int lu, int lv, int floor) {
 		return lot.mask() != null ? lot.mask().local(lu, lv) : insideInset(lot, lu, lv, inset(lot, floor));
@@ -71,11 +80,13 @@ public final class BuildingShape {
 		int nx = fp.maxX - fp.minX + 1, nz = fp.maxZ - fp.minZ + 1;
 		int[] lus = new int[nx * nz];
 		int[][] sum = new int[nx + 1][nz + 1];
+		boolean[] below = inset > 0 && lot.mask() == null ? grid(lot, fp, inset - 1) : null;
 		for (int i = 0; i < nx; i++) {
 			for (int j = 0; j < nz; j++) {
 				int[] l = local(fp, fp.minX + i, fp.minZ + j);
 				lus[i * nz + j] = l == null ? -1 : l[0];
-				boolean in = l != null && (lot.mask() != null ? lot.mask().local(l[0], l[1]) : insideInset(lot, l[0], l[1], inset));
+				boolean in = l != null && (lot.mask() != null ? lot.mask().local(l[0], l[1]) : insideInset(lot, l[0], l[1], inset))
+						&& (below == null || below[i * nz + j]);
 				sum[i + 1][j + 1] = (in ? 1 : 0) + sum[i][j + 1] + sum[i + 1][j] - sum[i][j];
 			}
 		}

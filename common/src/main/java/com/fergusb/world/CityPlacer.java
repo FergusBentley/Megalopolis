@@ -35,11 +35,28 @@ public final class CityPlacer {
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 		// Read water before writing anything
 		boolean[][] wide = waterMask(level, pos, x0, z0, Surface.B);
+		Surface[] built = new Surface[1];
+		BuildingShape.OWNER.set((x, z) -> {
+			Surface s = built[0];
+			int dx = x - x0, dz = z - z0;
+			if (s != null && dx >= -Surface.B && dz >= -Surface.B && dx < 16 + Surface.B && dz < 16 + Surface.B) return s.cell(dx, dz).lot();
+			return planner.classify(x, z).lot();
+		});
+		try {
+			placeChunk(level, generator, random, planner, x0, z0, pos, wide, built);
+		} finally {
+			BuildingShape.OWNER.remove();
+		}
+	}
+
+	private static void placeChunk(WorldGenLevel level, ChunkGenerator generator, RandomSource random, CityPlanner planner,
+								   int x0, int z0, BlockPos.MutableBlockPos pos, boolean[][] wide, Surface[] built) {
 		boolean[][] water = new boolean[18][18];
 		for (int i = 0; i < 18; i++) {
 			for (int j = 0; j < 18; j++) water[i][j] = wide[i - 1 + Surface.B][j - 1 + Surface.B];
 		}
 		Surface surf = new Surface(planner, wide, x0, z0);
+		built[0] = surf;
 		RoadPlacer roads = new RoadPlacer(level, surf);
 		for (int dz = 0; dz < 16; dz++) {
 			for (int dx = 0; dx < 16; dx++) {
@@ -58,13 +75,16 @@ public final class CityPlacer {
 				switch (cell.kind()) {
 					case LOT -> placeLotColumn(level, pos, planner, surf, cell.lot(), dx, dz, wet);
 					default -> {
-						if (!wet) placePaved(level, pos, surf.height(dx, dz), x, z);
+						if (wet) break;
+						if (surf.parkSide(dx, dz)) placeGreen(level, pos, surf.groundY(dx, dz), x, z);
+						else placePaved(level, pos, surf.height(dx, dz), x, z);
 					}
 				}
 			}
 		}
 		roads.finish();
 		ParkDecorator.decorate(level, generator, random, planner, surf, water);
+		DoorSteps.place(level, pos, planner, surf);
 	}
 
 	private static boolean[][] waterMask(WorldGenLevel level, BlockPos.MutableBlockPos pos, int x0, int z0, int border) {
@@ -104,7 +124,9 @@ public final class CityPlacer {
 				if (!wet) placeGreen(level, pos, surf.groundY(dx, dz), x, z);
 			}
 			case UNBUILDABLE, GREEN -> {
-				if (!wet) placePaved(level, pos, surf.height(dx, dz), x, z);
+				if (wet) break;
+				if (surf.parkSide(dx, dz)) placeGreen(level, pos, surf.groundY(dx, dz), x, z);
+				else placePaved(level, pos, surf.height(dx, dz), x, z);
 			}
 			case PLAZA -> placePaved(level, pos, surf.height(dx, dz), x, z);
 			case BUILDING -> {
